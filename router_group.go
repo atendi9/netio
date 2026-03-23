@@ -19,6 +19,7 @@ type Router interface {
 	// The returned Router inherits the current base path and middleware stack,
 	// allowing nested groups for better route organization.
 	Group(path string, m ...Handler) Router
+	Use(h ...Handler)
 }
 
 type group struct {
@@ -42,8 +43,8 @@ func (a *App) Group(basePath string, m ...Handler) Router {
 	}
 }
 
-func (g *group) Use(h Handler) {
-	g.middlewares = append(g.middlewares, h)
+func (g *group) Use(middlewares ...Handler) {
+	g.middlewares = append(g.middlewares, middlewares...)
 }
 
 func (g *group) join(path string) string {
