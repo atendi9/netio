@@ -42,6 +42,10 @@ func (a *App) Group(basePath string, m ...Handler) Router {
 	}
 }
 
+func (g *group) Use(h Handler) {
+	g.middlewares = append(g.middlewares, h)
+}
+
 func (g *group) join(path string) string {
 	if path == "" {
 		return g.basePath
