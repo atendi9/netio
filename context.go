@@ -53,16 +53,19 @@ var ctxPool = sync.Pool{
 	},
 }
 
+var ErrAborted = errors.New("aborted")
+
 // Next executes the next handler in the Context's handler chain.
-func (c *Context) Next() {
+func (c *Context) Next() error {
 	c.index++
 	for c.index < len(c.handlers) {
 		c.handlers[c.index](c)
 		if c.aborted {
-			return
+			return ErrAborted
 		}
 		c.index++
 	}
+	return nil
 }
 
 // Abort stops the execution of the remaining handlers.

@@ -10,7 +10,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/atendi9/handlerx"
 )
+
+func TestContext(t *testing.T) {
+	_, ok := any(&Context{}).(handlerx.Context)
+	if !ok {
+		t.Fatal("not implemented")
+	}
+}
+
 
 func TestContext_NextAndAbort(t *testing.T) {
 	c := &Context{
