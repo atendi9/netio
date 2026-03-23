@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -14,13 +15,99 @@ import (
 	"github.com/atendi9/handlerx"
 )
 
+func TestContext_Status(t *testing.T) {
+	c := &Context{}
+
+	ret := c.Status(404)
+
+	if c.status != 404 {
+		t.Errorf("expected status 404, got %d", c.status)
+	}
+
+	if ret != c {
+		t.Errorf("Status should return same context for chaining")
+	}
+}
+
+func TestContext_SendFile(t *testing.T) {
+	tmp := t.TempDir()
+	file := tmp + "/test.txt"
+
+	err := os.WriteFile(file, []byte("hello"), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rw := httptest.NewRecorder()
+	c := &Context{
+		conn:   &fakeConn{rw: rw},
+		status: 200,
+	}
+
+	c.SendFile(file)
+
+	if !strings.Contains(rw.Body.String(), "hello") {
+		t.Errorf("expected file content to be sent")
+	}
+}
+
+func TestContext_SendFile_Error(t *testing.T) {
+	rw := httptest.NewRecorder()
+	c := &Context{
+		conn:   &fakeConn{rw: rw},
+		status: 404,
+	}
+
+	c.SendFile("non-existent-file")
+
+	if !strings.Contains(rw.Body.String(), "404") {
+		t.Errorf("expected status to be sent on error")
+	}
+}
+
+func TestContext_SendFileFromReader(t *testing.T) {
+	rw := httptest.NewRecorder()
+
+	reader := io.NopCloser(strings.NewReader("stream-data"))
+
+	c := &Context{
+		conn:   &fakeConn{rw: rw},
+		status: 200,
+	}
+
+	c.SendFileFromReader(reader)
+
+	if !strings.Contains(rw.Body.String(), "stream-data") {
+		t.Errorf("expected streamed data")
+	}
+}
+
+type errorReader struct{}
+
+func (e *errorReader) Read(p []byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+func (e *errorReader) Close() error               { return nil }
+
+func TestContext_SendFileFromReader_Error(t *testing.T) {
+	rw := httptest.NewRecorder()
+
+	c := &Context{
+		conn:   &fakeConn{rw: rw},
+		status: 500,
+	}
+
+	c.SendFileFromReader(&errorReader{})
+
+	if !strings.Contains(rw.Body.String(), "500") {
+		t.Errorf("expected status on copy error")
+	}
+}
+
 func TestContext(t *testing.T) {
 	_, ok := any(&Context{}).(handlerx.Context)
 	if !ok {
 		t.Fatal("not implemented")
 	}
 }
-
 
 func TestContext_NextAndAbort(t *testing.T) {
 	c := &Context{
@@ -195,7 +282,7 @@ func TestContext_SendAndJSON(t *testing.T) {
 	}
 	c.Send([]byte("hello"))
 	if rw.Body.String() != "HTTP/1.1 0 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 5\r\n\r\nhello" {
-		t.Logf("%q",rw.Body)
+		t.Logf("%q", rw.Body)
 		t.Errorf("Send failed")
 	}
 
@@ -247,8 +334,6 @@ func TestContext_HeaderSet(t *testing.T) {
 		t.Errorf("HeaderSet failed")
 	}
 }
-
-// fakeConn implements net.Conn for testing Send/JSON
 type fakeConn struct {
 	rw *httptest.ResponseRecorder
 }

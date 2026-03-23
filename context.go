@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -207,6 +209,45 @@ func (c *Context) Params(name string, defaultValue ...string) string {
 		return defaultValue[0]
 	}
 	return ""
+}
+
+// Status sets the HTTP status code for the response.
+//
+// It returns the current Context instance to allow method chaining.
+//
+// Example:
+//
+//	ctx.Status(200).Send([]byte("ok"))
+func (c *Context) Status(statusCode int) *Context {
+	c.status = statusCode
+	return c
+}
+
+// SendFile reads a file from the given path and sends its content as the response.
+//
+// If the file cannot be read, it sends the current status code without a body.
+func (c *Context) SendFile(filePath string) {
+	b, err := os.ReadFile(filePath)
+	if err != nil {
+		c.SendStatus(c.status)
+		return
+	}
+	c.Send(b)
+}
+
+// SendFileFromReader streams data directly to the underlying connection.
+//
+// It uses io.Copy with net.Conn, which is efficient and avoids buffering the
+// entire content in memory. Suitable for large payloads.
+//
+// The reader is closed after the operation.
+func (c *Context) SendFileFromReader(r io.ReadCloser) {
+	defer r.Close()
+
+	_, err := io.Copy(c.conn, r)
+	if err != nil {
+		c.SendStatus(c.status)
+	}
 }
 
 // ParamsParser parses path parameters into a struct using `param` tags.
