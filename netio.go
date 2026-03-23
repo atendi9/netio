@@ -3,6 +3,7 @@ package netio
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ type App struct {
 	root        *node
 	mw          []Handler
 	maxBodySize int
+	ln          net.Listener
 }
 
 // MaxBodySize is a string type for configuration of max body size.
@@ -142,15 +144,39 @@ func (a *App) Listen() error {
 	if err != nil {
 		return err
 	}
+
+	a.ln = ln
+
 	var isFirstStartup = true
 	for {
 		if isFirstStartup {
 			a.startup()
 			isFirstStartup = false
 		}
-		conn, _ := ln.Accept()
+
+		conn, err := ln.Accept()
+		if err != nil {
+			return err
+		}
+
 		go a.serve(conn)
 	}
+}
+
+// Shutdown gracefully stops the application listener when the context is done.
+//
+// It blocks until the context is canceled or reaches its deadline,
+// then closes the underlying network listener, causing any blocking
+// Accept calls to return.
+//
+// If the listener is not initialized, Shutdown returns nil.
+func (a *App) Shutdown(ctx context.Context) error {
+	if a.ln == nil {
+		return nil
+	}
+
+	<-ctx.Done()
+	return a.ln.Close()
 }
 
 func (a *App) startup() {

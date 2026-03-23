@@ -1,6 +1,7 @@
 package netio
 
 import (
+	"context"
 	"net"
 	"strconv"
 	"strings"
@@ -144,5 +145,40 @@ func TestDetectContentType(t *testing.T) {
 	}
 	if detectContentType(textData) == "application/json" {
 		t.Error("Non-JSON detected as JSON")
+	}
+}
+
+func TestShutdown(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0"})
+
+	ln, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+	app.ln = ln
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+
+	go func() {
+		done <- app.Shutdown(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Shutdown returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Shutdown did not return in time")
+	}
+	_, err = ln.Accept()
+	if err == nil {
+		t.Error("expected listener to be closed")
 	}
 }
