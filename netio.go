@@ -217,6 +217,15 @@ func (a *App) serve(conn net.Conn) {
 		}
 
 		params := make([]KV, 0, 8)
+		if ctx.Method() == "OPTIONS" {
+			for _, h := range a.mw {
+				h(ctx)
+			}
+			if !ctx.aborted {
+				ctx.SendStatus(204)
+			}
+			return
+		}
 		h, ok := a.root.findMethod(string(ctx.method), splitBytes(ctx.path), &params)
 		if !ok {
 			writeResponseWithHeaders(conn, 404, []byte("Not Found"), ctx.resHeader)
