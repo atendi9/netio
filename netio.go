@@ -224,7 +224,9 @@ func (a *App) serve(conn net.Conn) {
 			if !ctx.aborted {
 				ctx.SendStatus(204)
 			}
-			return
+
+			ctxPool.Put(ctx)
+			continue
 		}
 		h, ok := a.root.findMethod(string(ctx.method), splitBytes(ctx.path), &params)
 		if !ok {
