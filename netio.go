@@ -201,6 +201,7 @@ func (a *App) serve(conn net.Conn) {
 	for {
 		ctx := ctxPool.Get().(*Context)
 		ctx.reset()
+		ctx.appName = a.appName
 		ctx.conn = conn
 		ctx.maxBodySize = a.maxBodySize
 
@@ -217,19 +218,35 @@ func (a *App) serve(conn net.Conn) {
 		params := make([]KV, 0, 8)
 
 		h, ok := a.root.findMethod(string(ctx.method), splitBytes(ctx.path), &params)
+
 		if ok {
 			ctx.params = params
-			ctx.handlers = append(append([]Handler(nil), a.mw...), h...)
+			ctx.handlers = append([]Handler{}, a.mw...)
+			ctx.handlers = append(ctx.handlers, h...)
 		} else {
 			ctx.params = params
-			ctx.handlers = append([]Handler(nil), a.mw...)
+			ctx.handlers = append([]Handler{}, a.mw...)
+
 			ctx.handlers = append(ctx.handlers, func(c *Context) {
-				ctx.writeResponseWithHeaders(a.log, http.StatusNoContent, []byte{})
+				c.SendStatus(http.StatusNoContent)
 			})
 		}
 
 		ctx.index = -1
+
 		ctx.Next()
+		if ctx.wrote {
+			if !keepAlive(ctx) {
+				ctxPool.Put(ctx)
+				return
+			}
+			ctxPool.Put(ctx)
+			continue
+		}
+
+		if !ctx.wrote {
+			ctx.SendStatus(http.StatusNoContent)
+		}
 
 		if !keepAlive(ctx) {
 			ctxPool.Put(ctx)
@@ -252,12 +269,12 @@ func (a *App) checkBodySize(ctx *Context) bool {
 
 	size, err := strconv.Atoi(string(cl))
 	if err != nil {
-		ctx.writeResponseWithHeaders(a.log, 400, []byte("Bad Request"))
+		ctx.SendStatus(400)
 		return false
 	}
 
 	if size > ctx.maxBodySize {
-		ctx.writeResponseWithHeaders(a.log, 413, []byte("Payload Too Large"))
+		ctx.SendStatus(413)
 		return false
 	}
 

@@ -32,6 +32,10 @@ type Context struct {
 
 	body []byte
 
+	wrote bool
+
+	appName string
+
 	handlers []Handler
 	index    int
 	aborted  bool
@@ -85,6 +89,7 @@ func (c *Context) reset() {
 	c.index = -1
 	c.aborted = false
 	c.status = 200
+	c.wrote = false
 }
 
 // Headers returns all request headers as a map.
@@ -300,7 +305,7 @@ func (c *Context) SendStatus(status int) error {
 
 // Send writes raw data to the response.
 func (c *Context) Send(data []byte) error {
-	c.writeResponseWithHeaders(func(msg ...string) {}, c.status, data)
+	c.writeResponseWithHeaders(NewDefaultLogger(c.appName), c.status, data)
 	return nil
 }
 
@@ -310,7 +315,7 @@ func (c *Context) JSON(data any) error {
 	if err != nil {
 		return err
 	}
-	c.writeResponseWithHeaders(func(msg ...string) {}, c.status, b)
+	c.Send(b)
 	return nil
 }
 

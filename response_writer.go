@@ -54,4 +54,5 @@ func (ctx *Context) writeResponseWithHeaders(
 	responseBytes := buf.Bytes()
 	logger(fmt.Sprintf("writing response: %s", string(responseBytes)))
 	ctx.conn.Write(responseBytes)
+	ctx.wrote = true
 }
