@@ -215,34 +215,21 @@ func (a *App) serve(conn net.Conn) {
 			ctxPool.Put(ctx)
 			return
 		}
-		
-		ctx.handlers = a.mw
-		ctx.Next()
 
-		if ctx.aborted {
-			if !keepAlive(ctx) {
-				ctxPool.Put(ctx)
-				return
-			}
-			ctxPool.Put(ctx)
-			continue
-		}
 		params := make([]KV, 0, 8)
 
 		h, ok := a.root.findMethod(string(ctx.method), splitBytes(ctx.path), &params)
-		if !ok {
-			writeResponseWithHeaders(conn, 404, []byte("Not Found"), ctx.resHeader)
-
-			if !keepAlive(ctx) {
-				ctxPool.Put(ctx)
-				return
-			}
-
-			ctxPool.Put(ctx)
-			continue
+		if ok {
+			ctx.params = params
+			ctx.handlers = append(append([]Handler(nil), a.mw...), h...)
+		} else {
+			ctx.handlers = append([]Handler(nil), a.mw...)
+			ctx.handlers = append(ctx.handlers, func(c *Context) {
+				writeResponseWithHeaders(conn, 404, []byte("Not Found"), c.resHeader)
+			})
 		}
-		ctx.params = params
-		ctx.handlers = append(ctx.handlers, h...)
+
+		ctx.index = -1
 		ctx.Next()
 
 		if !keepAlive(ctx) {
