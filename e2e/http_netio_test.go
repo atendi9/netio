@@ -12,7 +12,7 @@ import (
 	"github.com/atendi9/netio/cors"
 )
 
-func TestNetIO(t *testing.T) {
+func TestNetIOHTTP(t *testing.T) {
 	t.Helper()
 
 	portCh := make(chan string, 1)
