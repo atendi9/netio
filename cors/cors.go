@@ -1,6 +1,7 @@
 package cors
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -22,15 +23,11 @@ const AllowAll string = "*" // Special value to allow all origins in CORS
 // Middleware returns a configurable CORS middleware
 func Middleware(config Config) netio.Handler {
 	allowMethods := strings.Join(config.AllowMethods, ", ")
-	allowHeaders := strings.Join(config.AllowHeaders, ", ")
 	exposeHeaders := strings.Join(config.ExposeHeaders, ", ")
-	maxAge := ""
-	if config.MaxAge > 0 {
-		maxAge = strconv.Itoa(config.MaxAge)
-	}
 
 	return func(c *netio.Context) {
 		origin := c.Header("Origin")
+
 		allowed := false
 		for _, o := range config.AllowOrigins {
 			if o == AllowAll || o == origin {
@@ -39,26 +36,53 @@ func Middleware(config Config) netio.Handler {
 			}
 		}
 
-		if allowed {
+		if !allowed {
+			c.Next()
+			return
+		}
+
+		if config.AllowCredentials {
 			c.HeaderSet("Access-Control-Allow-Origin", origin)
-			if config.AllowCredentials {
-				c.HeaderSet("Access-Control-Allow-Credentials", "true")
+			c.HeaderSet("Access-Control-Allow-Credentials", "true")
+		} else {
+			if slices.Contains(config.AllowOrigins, AllowAll) {
+				c.HeaderSet("Access-Control-Allow-Origin", "*")
+			} else {
+				c.HeaderSet("Access-Control-Allow-Origin", origin)
 			}
-			if exposeHeaders != "" {
-				c.HeaderSet("Access-Control-Expose-Headers", exposeHeaders)
-			}
+		}
+
+		c.HeaderSet("Vary", "Origin")
+
+		if exposeHeaders != "" {
+			c.HeaderSet("Access-Control-Expose-Headers", exposeHeaders)
 		}
 
 		if c.Method() == "OPTIONS" {
 			if allowMethods != "" {
 				c.HeaderSet("Access-Control-Allow-Methods", allowMethods)
+			} else {
+				c.HeaderSet("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE")
 			}
-			if allowHeaders != "" {
-				c.HeaderSet("Access-Control-Allow-Headers", allowHeaders)
+
+			reqHeaders := c.Header("Access-Control-Request-Headers")
+
+			if len(config.AllowHeaders) > 0 {
+				if slices.Contains(config.AllowHeaders, AllowAll) {
+					if reqHeaders != "" {
+						c.HeaderSet("Access-Control-Allow-Headers", reqHeaders)
+					}
+				} else {
+					c.HeaderSet("Access-Control-Allow-Headers", strings.Join(config.AllowHeaders, ", "))
+				}
+			} else if reqHeaders != "" {
+				c.HeaderSet("Access-Control-Allow-Headers", reqHeaders)
 			}
-			if maxAge != "" {
-				c.HeaderSet("Access-Control-Max-Age", maxAge)
+
+			if config.MaxAge > 0 {
+				c.HeaderSet("Access-Control-Max-Age", strconv.Itoa(config.MaxAge))
 			}
+
 			c.SendStatus(204)
 			c.Abort()
 			return
