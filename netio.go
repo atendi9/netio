@@ -223,9 +223,10 @@ func (a *App) serve(conn net.Conn) {
 			ctx.params = params
 			ctx.handlers = append(append([]Handler(nil), a.mw...), h...)
 		} else {
+			ctx.params = params
 			ctx.handlers = append([]Handler(nil), a.mw...)
 			ctx.handlers = append(ctx.handlers, func(c *Context) {
-				writeResponseWithHeaders(conn, 404, []byte("Not Found"), c.resHeader)
+				writeResponseWithHeaders(conn, http.StatusNoContent, []byte{}, c.resHeader)
 			})
 		}
 
