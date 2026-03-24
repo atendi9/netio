@@ -55,6 +55,7 @@ func (g *group) join(path string) string {
 }
 
 func (g *group) chain(h []Handler) []Handler {
+	g.middlewares = append(g.app.mw, g.middlewares...)
 	return append(g.middlewares, h...)
 }
 
