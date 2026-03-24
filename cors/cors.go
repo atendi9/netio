@@ -22,21 +22,32 @@ const AllowAll string = "*" // Special value to allow all origins in CORS
 
 // Middleware returns a configurable CORS middleware
 func Middleware(config Config) netio.Handler {
+	allowAllOrigins := slices.Contains(config.AllowOrigins, AllowAll)
 	allowMethods := strings.Join(config.AllowMethods, ", ")
+	if allowMethods == "" {
+		allowMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+	}
+
 	exposeHeaders := strings.Join(config.ExposeHeaders, ", ")
 
 	return func(c *netio.Context) {
 		origin := c.Header("Origin")
 
+		c.HeaderSet("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
+
 		allowed := false
-		for _, o := range config.AllowOrigins {
-			if o == AllowAll || o == origin {
-				allowed = true
-				break
+		if allowAllOrigins {
+			allowed = true
+		} else {
+			for _, o := range config.AllowOrigins {
+				if o == origin {
+					allowed = true
+					break
+				}
 			}
 		}
 
-		if !allowed {
+		if !allowed || origin == "" {
 			c.Next()
 			return
 		}
@@ -45,25 +56,18 @@ func Middleware(config Config) netio.Handler {
 			c.HeaderSet("Access-Control-Allow-Origin", origin)
 			c.HeaderSet("Access-Control-Allow-Credentials", "true")
 		} else {
-			if slices.Contains(config.AllowOrigins, AllowAll) {
+			if allowAllOrigins {
 				c.HeaderSet("Access-Control-Allow-Origin", "*")
 			} else {
 				c.HeaderSet("Access-Control-Allow-Origin", origin)
 			}
 		}
 
-		c.HeaderSet("Vary", "Origin")
-
 		if exposeHeaders != "" {
 			c.HeaderSet("Access-Control-Expose-Headers", exposeHeaders)
 		}
-
 		if c.Method() == "OPTIONS" {
-			if allowMethods != "" {
-				c.HeaderSet("Access-Control-Allow-Methods", allowMethods)
-			} else {
-				c.HeaderSet("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE")
-			}
+			c.HeaderSet("Access-Control-Allow-Methods", allowMethods)
 
 			reqHeaders := c.Header("Access-Control-Request-Headers")
 

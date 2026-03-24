@@ -13,10 +13,13 @@ import (
 	"strings"
 )
 
+type startFn func(port string)
+
 // App represents a netio HTTP application.
 type App struct {
 	appName     string
 	port        string
+	startFn     startFn
 	logger      Logger
 	root        *node
 	mw          []Handler
@@ -41,6 +44,7 @@ type AppConfig struct {
 	AppName     string
 	MaxBodySize MaxBodySize
 	Logger      Logger
+	Startup     startFn
 }
 
 const defaultAppName = "netio"
@@ -56,6 +60,23 @@ func New(config AppConfig) (*App, error) {
 		port:        config.Port,
 		root:        &node{},
 		maxBodySize: maxBodySize,
+	}
+	if config.Startup != nil {
+		app.startFn = config.Startup
+	}
+	if len(app.port) == 0 {
+		listener, err := net.Listen("tcp", ":0")
+		if err != nil {
+			return nil, err
+		}
+		defer listener.Close()
+
+		addr := listener.Addr().String()
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		app.port = port
 	}
 	if len(config.AppName) > 0 {
 		app.appName = config.AppName
@@ -187,8 +208,12 @@ func (a *App) Shutdown(ctx context.Context) error {
 }
 
 func (a *App) startup() {
+	if a.startFn != nil {
+		a.startFn(a.port)
+		return
+	}
 	a.log(
-		"http.server is running",
+		"http.server is running\n",
 		fmt.Sprintf("http://localhost:%s\n", a.port),
 	)
 }
