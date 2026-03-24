@@ -2,12 +2,16 @@ package netio
 
 import (
 	"bytes"
-	"net"
+	"fmt"
 	"strconv"
 	"strings"
 )
 
-func writeResponseWithHeaders(conn net.Conn, status int, body []byte, headers []KV) {
+func (ctx *Context) writeResponseWithHeaders(
+	logger Logger,
+	status int,
+	body []byte,
+) {
 	var buf bytes.Buffer
 
 	buf.WriteString("HTTP/1.1 ")
@@ -16,7 +20,7 @@ func writeResponseWithHeaders(conn net.Conn, status int, body []byte, headers []
 
 	hasContentType := false
 	hasContentLength := false
-	for _, h := range headers {
+	for _, h := range ctx.resHeader {
 		key := string(h.K)
 		value := string(h.V)
 		if strings.EqualFold(key, "Content-Type") {
@@ -47,6 +51,7 @@ func writeResponseWithHeaders(conn net.Conn, status int, body []byte, headers []
 	buf.WriteString("\r\n")
 
 	buf.Write(body)
-
-	conn.Write(buf.Bytes())
+	responseBytes := buf.Bytes()
+	logger(fmt.Sprintf("writing response: %s", string(responseBytes)))
+	ctx.conn.Write(responseBytes)
 }

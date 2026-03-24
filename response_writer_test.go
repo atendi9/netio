@@ -17,8 +17,18 @@ func TestWriteResponseWithHeaders(t *testing.T) {
 	headers := []KV{
 		{K: []byte("X-Test-Header"), V: []byte("TestValue")},
 	}
+	app, _ := New(AppConfig{
+		Port:    "8080",
+		AppName: "test_env",
+	})
 
-	go writeResponseWithHeaders(server, status, body, headers)
+	go func() {
+		ctx := &Context{
+			conn:      server,
+			resHeader: headers,
+		}
+		ctx.writeResponseWithHeaders(app.log, status, body)
+	}()
 
 	var buf bytes.Buffer
 	tmp := make([]byte, 1024)

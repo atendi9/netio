@@ -17,6 +17,7 @@ import (
 type App struct {
 	appName     string
 	port        string
+	logger      Logger
 	root        *node
 	mw          []Handler
 	maxBodySize int
@@ -39,6 +40,7 @@ type AppConfig struct {
 	Port        string
 	AppName     string
 	MaxBodySize MaxBodySize
+	Logger      Logger
 }
 
 const defaultAppName = "netio"
@@ -57,6 +59,11 @@ func New(config AppConfig) (*App, error) {
 	}
 	if len(config.AppName) > 0 {
 		app.appName = config.AppName
+	}
+	if config.Logger != nil {
+		app.logger = config.Logger
+	} else {
+		app.logger = NewDefaultLogger(app.appName)
 	}
 	return app, nil
 }
@@ -181,18 +188,9 @@ func (a *App) Shutdown(ctx context.Context) error {
 
 func (a *App) startup() {
 	a.log(
-		a.newMsg("http.server is running"),
-		a.newMsg(fmt.Sprintf("http://localhost:%s\n", a.port)),
+		"http.server is running",
+		fmt.Sprintf("http://localhost:%s\n", a.port),
 	)
-}
-
-func (a *App) log(msgs ...string) {
-	message := strings.Join(msgs, "")
-	fmt.Print(message)
-}
-
-func (a *App) newMsg(msg string) string {
-	return fmt.Sprintf("\r%s ▷ %s\n", a.appName, msg)
 }
 
 func (a *App) serve(conn net.Conn) {
@@ -211,7 +209,7 @@ func (a *App) serve(conn net.Conn) {
 			return
 		}
 
-		if !checkBodySize(ctx) {
+		if !a.checkBodySize(ctx) {
 			ctxPool.Put(ctx)
 			return
 		}
@@ -226,7 +224,7 @@ func (a *App) serve(conn net.Conn) {
 			ctx.params = params
 			ctx.handlers = append([]Handler(nil), a.mw...)
 			ctx.handlers = append(ctx.handlers, func(c *Context) {
-				writeResponseWithHeaders(conn, http.StatusNoContent, []byte{}, c.resHeader)
+				ctx.writeResponseWithHeaders(a.log, http.StatusNoContent, []byte{})
 			})
 		}
 
@@ -242,7 +240,7 @@ func (a *App) serve(conn net.Conn) {
 	}
 }
 
-func checkBodySize(ctx *Context) bool {
+func (a *App) checkBodySize(ctx *Context) bool {
 	if ctx.maxBodySize <= 0 {
 		return true
 	}
@@ -254,12 +252,12 @@ func checkBodySize(ctx *Context) bool {
 
 	size, err := strconv.Atoi(string(cl))
 	if err != nil {
-		writeResponseWithHeaders(ctx.conn, 400, []byte("Bad Request"), ctx.resHeader)
+		ctx.writeResponseWithHeaders(a.log, 400, []byte("Bad Request"))
 		return false
 	}
 
 	if size > ctx.maxBodySize {
-		writeResponseWithHeaders(ctx.conn, 413, []byte("Payload Too Large"), ctx.resHeader)
+		ctx.writeResponseWithHeaders(a.log, 413, []byte("Payload Too Large"))
 		return false
 	}
 

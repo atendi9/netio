@@ -300,7 +300,7 @@ func (c *Context) SendStatus(status int) error {
 
 // Send writes raw data to the response.
 func (c *Context) Send(data []byte) error {
-	writeResponseWithHeaders(c.conn, c.status, data, c.resHeader)
+	c.writeResponseWithHeaders(func(msg ...string) {}, c.status, data)
 	return nil
 }
 
@@ -310,7 +310,7 @@ func (c *Context) JSON(data any) error {
 	if err != nil {
 		return err
 	}
-	writeResponseWithHeaders(c.conn, c.status, b, c.resHeader)
+	c.writeResponseWithHeaders(func(msg ...string) {}, c.status, b)
 	return nil
 }
 
