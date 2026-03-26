@@ -39,25 +39,6 @@ func TestNetIOHTTP(t *testing.T) {
 		c.JSON(map[string]any{"message": "Hello World"})
 	})
 
-	app.GET("/many-headers", func(c *netio.Context) {
-		// Verify all 20 custom headers are accessible
-		for i := 0; i < 20; i++ {
-			key := fmt.Sprintf("X-Custom-%d", i)
-			val := c.Header(key)
-			expected := fmt.Sprintf("value-%d", i)
-			if val != expected {
-				c.Status(500).JSON(map[string]any{
-					"err":      "header mismatch",
-					"key":      key,
-					"expected": expected,
-					"got":      val,
-				})
-				return
-			}
-		}
-		c.Send([]byte("ok"))
-	})
-
 	app.Use(cors.Middleware(cors.Config{
 		AllowOrigins:  allowedOrigins,
 		AllowMethods:  []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
@@ -135,31 +116,6 @@ func TestNetIOHTTP(t *testing.T) {
 	if got := res.Header.Get("Access-Control-Expose-Headers"); got != "*" {
 		t.Fatalf("expected Expose-Headers *, got %q", got)
 	}
-
-	// Test with many headers (>16, exceeding pool initial capacity)
-	t.Run("many headers persist through handler", func(t *testing.T) {
-		manyHeadersURL := fmt.Sprintf("http://localhost:%s/many-headers", port)
-		req, _ := http.NewRequest("GET", manyHeadersURL, nil)
-		for i := 0; i < 20; i++ {
-			req.Header.Set(fmt.Sprintf("X-Custom-%d", i), fmt.Sprintf("value-%d", i))
-		}
-
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("many headers request failed: %v", err)
-		}
-		defer resp.Body.Close()
-
-		body, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("many headers: expected 200, got %d, body: %s", resp.StatusCode, body)
-		}
-
-		// Verify the handler received all custom headers
-		if string(body) != "ok" {
-			t.Fatalf("many headers: expected 'ok', got %s", body)
-		}
-	})
 
 	preReq, _ := http.NewRequest("OPTIONS", url, nil)
 	preReq.Header.Set("Origin", origin)

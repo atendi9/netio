@@ -21,10 +21,10 @@ func parseRequest(r *bufio.Reader, c *Context) bool {
 
 func parseRequestLine(line []byte, c *Context) {
 	i := bytes.IndexByte(line, ' ')
-	c.method = append(c.method, line[:i]...)
+	c.method = line[:i]
 
 	j := bytes.IndexByte(line[i+1:], ' ')
-	c.path = append(c.path, line[i+1:i+1+j]...)
+	c.path = line[i+1 : i+1+j]
 }
 
 func parseHeaders(r *bufio.Reader, c *Context) {
@@ -35,15 +35,10 @@ func parseHeaders(r *bufio.Reader, c *Context) {
 		}
 
 		i := bytes.IndexByte(line, ':')
-
-		k := make([]byte, i)
-		copy(k, line[:i])
-
+		k := line[:i]
 		v := bytes.TrimSpace(line[i+1:])
-		vCopy := make([]byte, len(v))
-		copy(vCopy, v)
 
-		c.header = append(c.header, KV{k, vCopy})
+		c.header = append(c.header, KV{k, v})
 	}
 }
 
