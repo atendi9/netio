@@ -243,18 +243,29 @@ func (a *App) serve(conn net.Conn) {
 		params := make([]KV, 0, 8)
 
 		h, ok := a.root.findMethod(string(ctx.method), splitBytes(ctx.path), &params)
-
 		if ok {
 			ctx.params = params
 			ctx.handlers = append([]Handler{}, a.mw...)
 			ctx.handlers = append(ctx.handlers, h...)
-		} else {
+		} else if ctx.Method() != "OPTIONS" {
 			ctx.params = params
 			ctx.handlers = append([]Handler{}, a.mw...)
-
 			ctx.handlers = append(ctx.handlers, func(c *Context) {
-				c.SendStatus(http.StatusNoContent)
+				c.SendStatus(http.StatusNotFound)
 			})
+		} else {
+			ctx.params = params
+			for _, h := range append(ctx.handlers, a.mw...) {
+				h(ctx)
+				if ctx.wrote {
+					break
+				}
+			}
+			if !ctx.wrote {
+				ctx.SendStatus(http.StatusNoContent)
+				continue
+			}
+			continue
 		}
 
 		ctx.index = -1
