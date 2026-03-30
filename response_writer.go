@@ -12,6 +12,27 @@ func (ctx *Context) writeResponseWithHeaders(
 	status int,
 	body []byte,
 ) {
+	if ctx.isStdHTTP {
+		hasContentType := false
+		for _, h := range ctx.resHeader {
+			key := string(h.K)
+			if strings.EqualFold(key, "Content-Type") {
+				hasContentType = true
+			}
+			ctx.w.Header().Add(key, string(h.V))
+		}
+
+		if !hasContentType && len(body) > 0 {
+			ctx.w.Header().Set("Content-Type", detectContentType(body))
+		}
+
+		ctx.w.WriteHeader(status)
+		if len(body) > 0 {
+			ctx.w.Write(body)
+		}
+		ctx.wrote = true
+		return
+	}
 	var buf bytes.Buffer
 
 	buf.WriteString("HTTP/1.1 ")

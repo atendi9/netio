@@ -41,6 +41,10 @@ type Context struct {
 	aborted  bool
 
 	status int
+
+	w         http.ResponseWriter
+	r         *http.Request
+	isStdHTTP bool
 }
 
 // KV represents a key-value pair.
@@ -90,6 +94,7 @@ func (c *Context) reset() {
 	c.aborted = false
 	c.status = 200
 	c.wrote = false
+	c.isStdHTTP = false
 }
 
 // Headers returns all request headers as a map.
@@ -248,6 +253,14 @@ func (c *Context) SendFile(filePath string) {
 // The reader is closed after the operation.
 func (c *Context) SendFileFromReader(r io.ReadCloser) {
 	defer r.Close()
+	if c.isStdHTTP {
+		c.w.WriteHeader(c.status)
+		_, err := io.Copy(c.w, r)
+		if err != nil {
+			c.SendStatus(c.status)
+		}
+		return
+	}
 
 	_, err := io.Copy(c.conn, r)
 	if err != nil {
@@ -275,6 +288,13 @@ func (c *Context) ReqHeaderParser(v any) error {
 
 // IP returns the remote IP address of the connection.
 func (c *Context) IP() string {
+	if c.isStdHTTP {
+		host, _, err := net.SplitHostPort(c.r.RemoteAddr)
+		if err != nil {
+			return c.r.RemoteAddr
+		}
+		return host
+	}
 	host, _, err := net.SplitHostPort(c.conn.RemoteAddr().String())
 	if err != nil {
 		return c.conn.RemoteAddr().String()

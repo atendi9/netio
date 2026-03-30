@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -216,6 +217,58 @@ func (a *App) startup() {
 		"http.server is running\n",
 		fmt.Sprintf("http://localhost:%s\n", a.port),
 	)
+}
+
+// ServeHTTP makes the app implement Go's http.Handler interface.
+// This allows the app to be used in http.ListenAndServe.
+func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ctx := ctxPool.Get().(*Context)
+	ctx.reset()
+	defer ctxPool.Put(ctx)
+
+	ctx.appName = a.appName
+	ctx.w = w
+	ctx.r = r
+	ctx.isStdHTTP = true
+	ctx.maxBodySize = a.maxBodySize
+
+	ctx.method = []byte(r.Method)
+	ctx.path = []byte(r.URL.Path)
+
+	for k, values := range r.Header {
+		for _, v := range values {
+			ctx.header = append(ctx.header, KV{K: []byte(k), V: []byte(v)})
+		}
+	}
+	if r.Body != nil {
+		limitReader := io.LimitReader(r.Body, int64(a.maxBodySize))
+		ctx.body, _ = io.ReadAll(limitReader)
+		r.Body.Close()
+	}
+
+	params := make([]KV, 0, 8)
+	h, ok := a.root.findMethod(r.Method, splitBytes(ctx.path), &params)
+
+	ctx.params = params
+	ctx.handlers = append([]Handler{}, a.mw...)
+
+	if ok {
+		ctx.handlers = append(ctx.handlers, h...)
+	} else if r.Method == "OPTIONS" {
+		ctx.SendStatus(http.StatusNoContent)
+		return
+	} else {
+		ctx.handlers = append(ctx.handlers, func(c *Context) {
+			c.SendStatus(http.StatusNotFound)
+		})
+	}
+
+	ctx.index = -1
+	ctx.Next()
+
+	if !ctx.wrote {
+		ctx.SendStatus(http.StatusNoContent)
+	}
 }
 
 func (a *App) serve(conn net.Conn) {
