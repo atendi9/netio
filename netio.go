@@ -18,14 +18,15 @@ type startFn func(port string)
 
 // App represents a netio HTTP application.
 type App struct {
-	appName     string
-	port        string
-	startFn     startFn
-	logger      Logger
-	root        *node
-	mw          []Handler
-	maxBodySize int
-	ln          net.Listener
+	appName        string
+	port           string
+	startFn        startFn
+	logger         Logger
+	root           *node
+	mw             []Handler
+	maxBodySize    int
+	ln             net.Listener
+	isFirstStartup bool
 }
 
 // MaxBodySize is a string type for configuration of max body size.
@@ -175,12 +176,10 @@ func (a *App) Listen() error {
 	}
 
 	a.ln = ln
-
-	var isFirstStartup = true
 	for {
-		if isFirstStartup {
+		if a.isFirstStartup {
 			a.startup()
-			isFirstStartup = false
+			a.isFirstStartup = false
 		}
 
 		conn, err := ln.Accept()
@@ -222,6 +221,10 @@ func (a *App) startup() {
 // ServeHTTP makes the app implement Go's http.Handler interface.
 // This allows the app to be used in http.ListenAndServe.
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if a.isFirstStartup {
+		a.startup()
+		a.isFirstStartup = false
+	}
 	ctx := ctxPool.Get().(*Context)
 	ctx.reset()
 	defer ctxPool.Put(ctx)
