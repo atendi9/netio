@@ -24,7 +24,14 @@ func parseRequestLine(line []byte, c *Context) {
 	c.method = line[:i]
 
 	j := bytes.IndexByte(line[i+1:], ' ')
-	c.path = line[i+1 : i+1+j]
+	uri := line[i+1 : i+1+j]
+
+	if q := bytes.IndexByte(uri, '?'); q != -1 {
+		c.path = uri[:q]
+		parseQueryString(uri[q+1:], c)
+	} else {
+		c.path = uri
+	}
 }
 
 func parseHeaders(r *bufio.Reader, c *Context) {
@@ -39,6 +46,27 @@ func parseHeaders(r *bufio.Reader, c *Context) {
 		v := bytes.TrimSpace(line[i+1:])
 
 		c.header = append(c.header, KV{k, v})
+	}
+}
+
+func parseQueryString(qs []byte, c *Context) {
+	for len(qs) > 0 {
+		var pair []byte
+		if i := bytes.IndexByte(qs, '&'); i != -1 {
+			pair = qs[:i]
+			qs = qs[i+1:]
+		} else {
+			pair = qs
+			qs = nil
+		}
+		if len(pair) == 0 {
+			continue
+		}
+		if eq := bytes.IndexByte(pair, '='); eq != -1 {
+			c.query = append(c.query, KV{pair[:eq], pair[eq+1:]})
+		} else {
+			c.query = append(c.query, KV{pair, nil})
+		}
 	}
 }
 
