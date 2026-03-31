@@ -109,7 +109,7 @@ func TestNetIOHTTP(t *testing.T) {
 		t.Fatalf("expected Allow-Origin %q, got %q", origin, got)
 	}
 
-	if got := res.Header.Get("Vary"); got != "Origin, Access-Control-Request-Method, Access-Control-Request-Headers" {
+	if got := res.Header.Get("Vary"); got != "Origin" {
 		t.Fatalf("expected Vary=Origin, got %q", got)
 	}
 

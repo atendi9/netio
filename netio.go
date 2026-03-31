@@ -149,26 +149,39 @@ func (a *App) Use(h Handler) {
 // GET registers a GET route with handlers.
 func (a *App) GET(path string, h ...Handler) {
 	a.root.addMethod("GET", split(path), h)
+	a.registerOptions(path)
 }
 
 // POST registers a POST route with handlers.
 func (a *App) POST(path string, h ...Handler) {
 	a.root.addMethod("POST", split(path), h)
+	a.registerOptions(path)
 }
 
 // PUT registers a PUT route with handlers.
 func (a *App) PUT(path string, h ...Handler) {
 	a.root.addMethod("PUT", split(path), h)
+	a.registerOptions(path)
 }
 
 // DELETE registers a DELETE route with handlers.
 func (a *App) DELETE(path string, h ...Handler) {
 	a.root.addMethod("DELETE", split(path), h)
+	a.registerOptions(path)
 }
 
 // PATCH registers a PATCH route with handlers.
 func (a *App) PATCH(path string, h ...Handler) {
 	a.root.addMethod("PATCH", split(path), h)
+	a.registerOptions(path)
+}
+
+func (a *App) registerOptions(path string) {
+	a.root.addMethod("OPTIONS", split(path), []Handler{
+		func(c *Context) {
+			c.SendStatus(http.StatusNoContent)
+		},
+	})
 }
 
 // Listen starts the HTTP server on the configured port.
