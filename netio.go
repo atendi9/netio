@@ -12,21 +12,23 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 type startFn func(port string)
 
 // App represents a netio HTTP application.
 type App struct {
-	appName        string
-	port           string
-	startFn        startFn
-	logger         Logger
-	root           *node
-	mw             []Handler
-	maxBodySize    int
-	ln             net.Listener
-	isFirstStartup bool
+	appName            string
+	port               string
+	startFn            startFn
+	logger             Logger
+	root               *node
+	mw                 []Handler
+	maxBodySize        int
+	ln                 net.Listener
+	isFirstStartup     atomic.Bool
+	isFirstStartupHTTP atomic.Bool
 }
 
 // MaxBodySize is a string type for configuration of max body size.
@@ -63,6 +65,7 @@ func New(config AppConfig) (*App, error) {
 		root:        &node{},
 		maxBodySize: maxBodySize,
 	}
+	app.isFirstStartupHTTP.Store(true)
 	if config.Startup != nil {
 		app.startFn = config.Startup
 	}
@@ -176,10 +179,11 @@ func (a *App) Listen() error {
 	}
 
 	a.ln = ln
+	a.isFirstStartup.Store(true)
 	for {
-		if a.isFirstStartup {
+		if a.isFirstStartup.Load() {
 			a.startup()
-			a.isFirstStartup = false
+			a.isFirstStartup.Store(false)
 		}
 
 		conn, err := ln.Accept()
@@ -221,9 +225,9 @@ func (a *App) startup() {
 // ServeHTTP makes the app implement Go's http.Handler interface.
 // This allows the app to be used in http.ListenAndServe.
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if a.isFirstStartup {
+	if a.isFirstStartupHTTP.Load() {
 		a.startup()
-		a.isFirstStartup = false
+		a.isFirstStartupHTTP.Store(false)
 	}
 	ctx := ctxPool.Get().(*Context)
 	ctx.reset()
