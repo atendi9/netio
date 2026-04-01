@@ -19,7 +19,8 @@ type Config struct {
 	MaxAge           int                      // Cache duration in seconds
 }
 
-const AllowAll string = "*" // Special value to allow all origins in CORS
+// AllowAll is a special value to allow all origins in CORS
+const AllowAll string = "*"
 
 // DefaultConfig returns a base configuration so you don't have to fill everything in manually.
 func DefaultConfig() Config {
@@ -46,8 +47,11 @@ func Middleware(config Config) netio.Handler {
 		origin := c.Header("Origin")
 
 		if origin == "" {
-			c.Next()
-			return
+			if allowAllOrigins || len(config.AllowOrigins) == 0 {
+				origin = AllowAll
+			} else {
+				origin = strings.Join(config.AllowOrigins, ", ")
+			}
 		}
 
 		c.HeaderSet("Vary", "Origin")
