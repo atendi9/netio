@@ -239,7 +239,7 @@ func (c *Context) Status(statusCode int) *Context {
 func (c *Context) SendFile(filePath string) {
 	b, err := os.ReadFile(filePath)
 	if err != nil {
-		c.SendStatus(c.status)
+		c.SendStatus(http.StatusNotFound)
 		return
 	}
 	c.Send(b)
