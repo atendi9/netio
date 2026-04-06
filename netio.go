@@ -10,6 +10,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -241,21 +243,40 @@ func (a *App) startup() {
 //	ServeFiles("/static/", "./public")
 //
 // will serve files from the "./public" directory at the "/static/" endpoint.
-func (a *App) ServeFiles(endpoint, path string) error {
-	if len(endpoint) == 0 {
-		endpoint = "/"
-	}
-	if endpoint[len(endpoint)-1] != '/' {
-		endpoint += "/"
-	}
-	a.GET(endpoint+":filename", func(c *Context) {
-		filename := c.Param("filename")
-		if path[len(path)-1] != '/' {
-			path += "/"
-		}
-		c.SendFile(path + filename)
-	})
-	return nil
+func (a *App) ServeFiles(endpoint, dirPath string) error {
+    if len(endpoint) == 0 {
+        endpoint = "/"
+    }
+    if endpoint[len(endpoint)-1] != '/' {
+        endpoint += "/"
+    }
+
+    absDirPath, err := filepath.Abs(dirPath)
+    if err != nil {
+        return err
+    }
+
+    absDirPath = filepath.Clean(absDirPath) + string(filepath.Separator)
+
+    a.GET(endpoint+":filename", func(c *Context) {
+        filename := c.Param("filename")
+
+        decodedFilename, err := url.PathUnescape(filename)
+        if err != nil {
+            c.SendStatus(http.StatusBadRequest)
+            return
+        }
+
+        fullPath := filepath.Join(absDirPath, decodedFilename)
+		
+        if !strings.HasPrefix(fullPath, absDirPath) {
+            c.SendStatus(http.StatusForbidden)
+            return
+        }
+
+        c.SendFile(fullPath)
+    })
+    return nil
 }
 
 // ServeHTTP makes the app implement Go's http.Handler interface.
