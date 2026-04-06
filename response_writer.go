@@ -3,6 +3,7 @@ package netio
 import (
 	"bytes"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 )
@@ -37,7 +38,14 @@ func (ctx *Context) writeResponseWithHeaders(
 
 	buf.WriteString("HTTP/1.1 ")
 	buf.WriteString(strconv.Itoa(status))
-	buf.WriteString(" OK\r\n")
+	buf.WriteString(" ")
+
+	statusText := http.StatusText(status)
+	if statusText == "" {
+		statusText = "Unknown Status"
+	}
+	buf.WriteString(statusText)
+	buf.WriteString("\r\n")
 
 	hasContentType := false
 	hasContentLength := false
