@@ -2,7 +2,12 @@ package netio
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -80,6 +85,71 @@ func TestUseAndRoutes(t *testing.T) {
 			t.Errorf("%s handler not registered correctly", method)
 		}
 	}
+}
+
+func TestServeFiles(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.Create(dir + "/test.txt")
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer f.Close()
+	msg := "Hello, NetIO!"
+	if _, err = f.Write([]byte(msg)); err != nil {
+		t.Fatalf("Failed to write to test file: %v", err)
+	}
+	t.Run("HTTP file serving using standard http.Server", func(t *testing.T) {
+		var port string = "0"
+		app, _ := New(AppConfig{Startup: func(p string) {
+			port = p
+		}})
+
+		app.ServeFiles("/static/", dir)
+		res := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s/static/test.txt", port), nil)
+		app.ServeHTTP(res, req)
+
+		if res.Code != http.StatusOK {
+			t.Fatalf("Expected status 200, got %d", res.Code)
+		}
+		if res.Body.String() != msg {
+			t.Fatalf("Expected body '%s', got '%s'", msg, res.Body.String())
+		}
+	})
+	t.Run("HTTP file serving using NetIO http.Server", func(t *testing.T) {
+        portChan := make(chan string, 1)
+        
+        app, _ := New(AppConfig{Startup: func(p string) {
+            portChan <- p
+        }})
+
+        app.ServeFiles("/static/", dir)
+        go func() { 
+            app.Listen()
+        }()
+        
+        port := <-portChan
+
+        res, err := http.Get(fmt.Sprintf("http://localhost:%s/static/test.txt", port))
+        if err != nil {
+            t.Fatalf("Failed to make GET request: %v", err)
+        }
+        defer res.Body.Close()
+        
+        if res.StatusCode != http.StatusOK {
+            t.Fatalf("Expected status 200, got %d", res.StatusCode)
+        }
+        
+        body, err := io.ReadAll(res.Body)
+        if err != nil {
+            t.Fatalf("Failed to read response body: %v", err)
+        }
+        
+        if string(body) != msg {
+            t.Fatalf("Expected body '%s', got '%s'", msg, string(body))
+        }
+    })
+
 }
 
 func TestListen(t *testing.T) {

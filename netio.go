@@ -235,6 +235,29 @@ func (a *App) startup() {
 	)
 }
 
+// ServeFiles serves static files from the specified directory at the given endpoint.
+// For example:
+//
+//	ServeFiles("/static/", "./public")
+//
+// will serve files from the "./public" directory at the "/static/" endpoint.
+func (a *App) ServeFiles(endpoint, path string) error {
+	if len(endpoint) == 0 {
+		endpoint = "/"
+	}
+	if endpoint[len(endpoint)-1] != '/' {
+		endpoint += "/"
+	}
+	a.GET(endpoint+":filename", func(c *Context) {
+		filename := c.Param("filename")
+		if path[len(path)-1] != '/' {
+			path += "/"
+		}
+		c.SendFile(path + filename)
+	})
+	return nil
+}
+
 // ServeHTTP makes the app implement Go's http.Handler interface.
 // This allows the app to be used in http.ListenAndServe.
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
