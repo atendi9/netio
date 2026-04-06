@@ -281,7 +281,7 @@ func TestContext_SendAndJSON(t *testing.T) {
 		conn: &fakeConn{rw: rw},
 	}
 	c.Send([]byte("hello"))
-	if rw.Body.String() != "HTTP/1.1 0 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 5\r\n\r\nhello" {
+	if rw.Body.String() != "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 5\r\n\r\nhello" {
 		t.Logf("%q", rw.Body)
 		t.Errorf("Send failed")
 	}

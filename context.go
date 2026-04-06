@@ -325,7 +325,7 @@ func (c *Context) SendStatus(status int) error {
 
 // Send writes raw data to the response.
 func (c *Context) Send(data []byte) error {
-	c.writeResponseWithHeaders(NewDefaultLogger(c.appName), c.status, data)
+	c.writeResponseWithHeaders(NewDefaultLogger(c.appName), data)
 	return nil
 }
 
