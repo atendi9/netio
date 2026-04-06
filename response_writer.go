@@ -10,9 +10,11 @@ import (
 
 func (ctx *Context) writeResponseWithHeaders(
 	logger Logger,
-	status int,
 	body []byte,
 ) {
+	if ctx.status < http.StatusContinue {
+		ctx.status = http.StatusOK
+	}
 	if ctx.isStdHTTP {
 		hasContentType := false
 		for _, h := range ctx.resHeader {
@@ -27,7 +29,7 @@ func (ctx *Context) writeResponseWithHeaders(
 			ctx.w.Header().Set("Content-Type", detectContentType(body))
 		}
 
-		ctx.w.WriteHeader(status)
+		ctx.w.WriteHeader(ctx.status)
 		if len(body) > 0 {
 			ctx.w.Write(body)
 		}
@@ -37,10 +39,10 @@ func (ctx *Context) writeResponseWithHeaders(
 	var buf bytes.Buffer
 
 	buf.WriteString("HTTP/1.1 ")
-	buf.WriteString(strconv.Itoa(status))
+	buf.WriteString(strconv.Itoa(ctx.status))
 	buf.WriteString(" ")
 
-	statusText := http.StatusText(status)
+	statusText := http.StatusText(ctx.status)
 	if statusText == "" {
 		statusText = "Unknown Status"
 	}
