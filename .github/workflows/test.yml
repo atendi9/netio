@@ -19,6 +19,11 @@ jobs:
 
       - name: Cloning repository
         uses: actions/checkout@v4
+      
+      - name: Install test runner
+        run: |
+            curl -fsSL https://raw.githubusercontent.com/atendi9/capivara/main/install.sh | bash
+            echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Run all netio tests
-        run: go test ./... --race -cover
+        run: capivara ./... --race -cover
