@@ -1,2 +1,2 @@
 test:
-	@go test ./... -v --race -cover
+	@capivara ./... -v --race -cover
