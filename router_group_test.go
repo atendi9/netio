@@ -3,6 +3,8 @@ package netio
 import (
 	"net"
 	"testing"
+
+	"github.com/atendi9/capivara/assert"
 )
 
 func TestGroupPrefix(t *testing.T) {
@@ -18,9 +20,7 @@ func TestGroupPrefix(t *testing.T) {
 
 	params := []KV{}
 	h, ok := app.root.findMethod("GET", split("/api/users"), &params)
-	if !ok {
-		t.Fatalf("expected route to be registered")
-	}
+	assert.True(t, ok)
 
 	client, server := net.Pipe()
 	defer client.Close()
@@ -43,8 +43,5 @@ func TestGroupPrefix(t *testing.T) {
 	_, _ = client.Read(buf)
 
 	<-done
-
-	if !called {
-		t.Fatalf("handler was not called")
-	}
+	assert.True(t, called)
 }

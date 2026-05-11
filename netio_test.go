@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/atendi9/capivara/assert"
 )
 
 func TestNew(t *testing.T) {
@@ -53,13 +55,8 @@ func TestNew(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			app, err := New(tt.config)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("New() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if app != nil && app.appName != tt.wantAppName {
-				t.Errorf("New() appName = %v, want %v", app.appName, tt.wantAppName)
-			}
+			assert.False(t, (err != nil) != tt.wantErr)
+			assert.False(t, app != nil && app.appName != tt.wantAppName)
 		})
 	}
 }
@@ -76,116 +73,90 @@ func TestUseAndRoutes(t *testing.T) {
 	app.DELETE("/delete", handler)
 	app.PATCH("/patch", handler)
 
-	if len(app.mw) != 1 {
-		t.Errorf("Expected 1 middleware, got %d", len(app.mw))
-	}
+	assert.LengthSlice(t, 1, app.mw)
+
 	for _, method := range []string{"GET", "POST", "PUT", "DELETE", "PATCH"} {
 		h, ok := app.root.findMethod(method, split("/"+strings.ToLower(method)), nil)
-		if !ok || len(h) != 1 {
-			t.Errorf("%s handler not registered correctly", method)
-		}
+		assert.False(t, !ok || len(h) != 1)
 	}
 }
 
 func TestServeFiles(t *testing.T) {
-    dir := t.TempDir()
-    f, err := os.Create(dir + "/test.txt")
-    if err != nil {
-        t.Fatalf("Failed to create test file: %v", err)
-    }
-    defer f.Close()
-    msg := "Hello, NetIO!"
-    if _, err = f.Write([]byte(msg)); err != nil {
-        t.Fatalf("Failed to write to test file: %v", err)
-    }
-	
-    t.Run("Path traversal vulnerability using NetIO http.Server", func(t *testing.T) {
-        portChan := make(chan string, 1)
-        
-        app, _ := New(AppConfig{Startup: func(p string) {
-            portChan <- p
-        }})
+	dir := t.TempDir()
+	f, err := os.Create(dir + "/test.txt")
+	assert.NoError(t, err)
+	defer f.Close()
+	msg := "Hello, NetIO!"
+	_, err = f.Write([]byte(msg))
+	assert.NoError(t, err)
 
-        app.ServeFiles("/static/", dir)
-        go func() { 
-            app.Listen()
-        }()
-        
-        port := <-portChan
+	t.Run("Path traversal vulnerability using NetIO http.Server", func(t *testing.T) {
+		portChan := make(chan string, 1)
 
-        url := fmt.Sprintf("http://localhost:%s/static/..%%2f..%%2fetc%%2fpasswd", port)
-        res, err := http.Get(url)
-        if err != nil {
-            t.Fatalf("Failed to make GET request: %v", err)
-        }
-        defer res.Body.Close()
-        
-        if res.StatusCode != http.StatusForbidden {
-            t.Fatalf("Expected status 403 Forbidden, got %d", res.StatusCode)
-        }
-    })
+		app, _ := New(AppConfig{Startup: func(p string) {
+			portChan <- p
+		}})
 
-    t.Run("HTTP file serving using standard http.Server", func(t *testing.T) {
-        var port string = "0"
-        app, _ := New(AppConfig{Startup: func(p string) {
-            port = p
-        }})
+		app.ServeFiles("/static/", dir)
+		go func() {
+			app.Listen()
+		}()
 
-        app.ServeFiles("/static/", dir)
-        res := httptest.NewRecorder()
-        req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s/static/test.txt", port), nil)
-        app.ServeHTTP(res, req)
+		port := <-portChan
 
-        if res.Code != http.StatusOK {
-            t.Fatalf("Expected status 200, got %d", res.Code)
-        }
-        if res.Body.String() != msg {
-            t.Fatalf("Expected body '%s', got '%s'", msg, res.Body.String())
-        }
-    })
-    
-    t.Run("HTTP file serving using NetIO http.Server", func(t *testing.T) {
-        portChan := make(chan string, 1)
-        
-        app, _ := New(AppConfig{Startup: func(p string) {
-            portChan <- p
-        }})
+		url := fmt.Sprintf("http://localhost:%s/static/..%%2f..%%2fetc%%2fpasswd", port)
+		res, err := http.Get(url)
+		assert.NoError(t, err)
+		defer res.Body.Close()
+		assertEqual(t, res.StatusCode, http.StatusForbidden)
+	})
 
-        app.ServeFiles("/static/", dir)
-        go func() { 
-            app.Listen()
-        }()
-        
-        port := <-portChan
+	t.Run("HTTP file serving using standard http.Server", func(t *testing.T) {
+		var port string = "0"
+		app, _ := New(AppConfig{Startup: func(p string) {
+			port = p
+		}})
 
-        res, err := http.Get(fmt.Sprintf("http://localhost:%s/static/test.txt", port))
-        if err != nil {
-            t.Fatalf("Failed to make GET request: %v", err)
-        }
-        defer res.Body.Close()
-        
-        if res.StatusCode != http.StatusOK {
-            t.Fatalf("Expected status 200, got %d", res.StatusCode)
-        }
-        
-        body, err := io.ReadAll(res.Body)
-        if err != nil {
-            t.Fatalf("Failed to read response body: %v", err)
-        }
-        
-        if string(body) != msg {
-            t.Fatalf("Expected body '%s', got '%s'", msg, string(body))
-        }
-    })
+		app.ServeFiles("/static/", dir)
+		res := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s/static/test.txt", port), nil)
+		app.ServeHTTP(res, req)
+		assertEqual(t, res.Code, http.StatusOK)
+		assertEqual(t, res.Body.String(), msg)
+	})
+
+	t.Run("HTTP file serving using NetIO http.Server", func(t *testing.T) {
+		portChan := make(chan string, 1)
+
+		app, _ := New(AppConfig{Startup: func(p string) {
+			portChan <- p
+		}})
+
+		app.ServeFiles("/static/", dir)
+		go func() {
+			app.Listen()
+		}()
+
+		port := <-portChan
+
+		res, err := http.Get(fmt.Sprintf("http://localhost:%s/static/test.txt", port))
+		assert.NoError(t, err)
+		defer res.Body.Close()
+
+		assertEqual(t, res.StatusCode, http.StatusOK)
+
+		body, err := io.ReadAll(res.Body)
+		assert.NoError(t, err)
+
+		assertEqual(t, string(body), msg)
+	})
 }
 
 func TestListen(t *testing.T) {
-	app, _ := New(AppConfig{Port: "0"}) 
+	app, _ := New(AppConfig{Port: "0"})
 
 	ln, err := net.Listen("tcp", ":"+app.port)
-	if err != nil {
-		t.Fatalf("Failed to listen: %v", err)
-	}
+	assert.NoError(t, err)
 	defer ln.Close()
 
 	done := make(chan struct{})
@@ -197,9 +168,7 @@ func TestListen(t *testing.T) {
 
 	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
 	conn, err := net.Dial("tcp", "127.0.0.1:"+port)
-	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
+	assert.NoError(t, err)
 	conn.Close()
 
 	select {
@@ -224,25 +193,17 @@ func TestGenerateMaxBodySize(t *testing.T) {
 
 	for _, tt := range tests {
 		got, err := generateMaxBodySize(MaxBodySize(tt.input))
-		if (err != nil) != tt.err {
-			t.Errorf("generateMaxBodySize(%q) error = %v, wantErr %v", tt.input, err, tt.err)
-		}
-		if err == nil && got != tt.want {
-			t.Errorf("generateMaxBodySize(%q) = %d, want %d", tt.input, got, tt.want)
-		}
+		assert.False(t, (err != nil) != tt.err)
+		assert.False(t, err == nil && got != tt.want)
 	}
 }
 
 func TestDetectContentType(t *testing.T) {
 	jsonData := []byte(`{"foo":"bar"}`)
 	textData := []byte("hello world")
-
-	if detectContentType(jsonData) != "application/json" {
-		t.Error("JSON content type detection failed")
-	}
-	if detectContentType(textData) == "application/json" {
-		t.Error("Non-JSON detected as JSON")
-	}
+	jsonContentType := "application/json"
+	assertEqual(t, detectContentType(jsonData), jsonContentType)
+	assertEqual(t, detectContentType(textData) == jsonContentType, false)
 }
 
 func TestShutdown(t *testing.T) {
@@ -268,14 +229,10 @@ func TestShutdown(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Errorf("Shutdown returned error: %v", err)
-		}
+		assert.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("Shutdown did not return in time")
 	}
 	_, err = ln.Accept()
-	if err == nil {
-		t.Error("expected listener to be closed")
-	}
+	assert.Error(t, err)
 }

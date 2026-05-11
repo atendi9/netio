@@ -5,6 +5,8 @@ import (
 	"net"
 	"strings"
 	"testing"
+
+	"github.com/atendi9/capivara/assert"
 )
 
 func TestWriteResponseWithHeaders(t *testing.T) {
@@ -32,17 +34,8 @@ func TestWriteResponseWithHeaders(t *testing.T) {
 	buf.Write(tmp[:n])
 
 	got := buf.String()
-
-	if !strings.HasPrefix(got, "HTTP/1.1 200 OK") {
-		t.Errorf("esperado status 'HTTP/1.1 200 OK', got: %s", got)
-	}
-	if !strings.Contains(got, "X-Test-Header: TestValue") {
-		t.Errorf("esperado header 'X-Test-Header: TestValue', got: %s", got)
-	}
-	if !strings.Contains(got, "Content-Length: 13") {
-		t.Errorf("esperado Content-Length 13, got: %s", got)
-	}
-	if !strings.HasSuffix(got, "Hello, world!") {
-		t.Errorf("esperado body 'Hello, world!', got: %s", got)
-	}
+	assert.True(t, strings.HasPrefix(got, "HTTP/1.1 200 OK"))
+	assert.True(t, strings.Contains(got, "X-Test-Header: TestValue"))
+	assert.True(t, strings.Contains(got, "Content-Length: 13"))
+	assert.True(t, strings.HasSuffix(got, "Hello, world!"))
 }

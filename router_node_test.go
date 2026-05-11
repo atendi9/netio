@@ -3,6 +3,8 @@ package netio
 import (
 	"bytes"
 	"testing"
+
+	"github.com/atendi9/capivara/assert"
 )
 
 func TestNode(t *testing.T) {
@@ -24,50 +26,32 @@ func TestNode(t *testing.T) {
 	t.Run("find existing static path", func(t *testing.T) {
 		params := []KV{}
 		handlers, ok := root.findMethod("GET", [][]byte{[]byte("home")}, &params)
-		if !ok {
-			t.Fatal("expected handler found")
-		}
-		if len(handlers) != 1 {
-			t.Fail()
-		}
-		if len(params) != 0 {
-			t.Fatalf("expected no params, got %+v", params)
-		}
+		assert.True(t, ok)
+		assert.LengthSlice(t, 1, handlers)
+		assert.LengthSlice(t, 0, params)
 	})
 
 	t.Run("find existing param path", func(t *testing.T) {
 		params := []KV{}
 		handlers, ok := root.findMethod("GET", [][]byte{[]byte("user"), []byte("42")}, &params)
-		if !ok {
-			t.Fatal("expected handler found")
-		}
-		if len(handlers) != 1 {
-			t.Fail()
-		}
-		if len(params) != 1 || !bytes.Equal(params[0].K, []byte("id")) || !bytes.Equal(params[0].V, []byte("42")) {
-			t.Fatalf("unexpected params: %+v", params)
-		}
+		assert.True(t, ok)
+		assert.LengthSlice(t, 1 ,handlers)
+		ok = len(params) != 1 || !bytes.Equal(params[0].K, []byte("id")) || !bytes.Equal(params[0].V, []byte("42"))
+		assert.False(t, ok)
 	})
 
 	t.Run("find non-existing path", func(t *testing.T) {
 		params := []KV{}
 		h, ok := root.findMethod("GET", [][]byte{[]byte("unknown")}, &params)
-		if ok || h != nil {
-			t.Fatal("expected no handler found")
-		}
+		assert.False(t, ok || h != nil)
 	})
 
 	t.Run("different method on same path", func(t *testing.T) {
 		params := []KV{}
 		handlers, ok := root.findMethod("POST", [][]byte{[]byte("user"), []byte("42")}, &params)
-		if !ok {
-			t.Fatal("expected handler found")
-		}
-		if len(handlers) != 1 {
-			t.Fail()
-		}
-		if len(params) != 1 || !bytes.Equal(params[0].K, []byte("id")) || !bytes.Equal(params[0].V, []byte("42")) {
-			t.Fatalf("unexpected params: %+v", params)
-		}
+		assert.True(t, ok)
+		assert.LengthSlice(t, 1, handlers)
+		ok = len(params) != 1 || !bytes.Equal(params[0].K, []byte("id")) || !bytes.Equal(params[0].V, []byte("42"))
+		assert.False(t, ok)
 	})
 }

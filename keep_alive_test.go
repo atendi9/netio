@@ -29,9 +29,7 @@ func TestKeepAlive(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Context{header: tt.headers}
 			got := keepAlive(c)
-			if got != tt.expected {
-				t.Errorf("keepAlive() = %v; want %v", got, tt.expected)
-			}
+			assertEqual(t, got, tt.expected)
 		})
 	}
 }

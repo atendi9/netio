@@ -6,41 +6,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/atendi9/capivara/assert"
 	"github.com/atendi9/handlerx"
 	"github.com/atendi9/netio"
 )
 
 func TestCORSWithNetIOAdapter(t *testing.T) {
 	app := setupApp()
-	app.Use(app.Cors("https://meusite.com.br"))
+	allowedOrigin := "https://meusite.com.br"
+	app.Use(app.Cors(allowedOrigin))
 	handlerConverter := NetIOConverter(app)
 	app.Get("/api/data", handlerConverter.Convert(func(c handlerx.Context) handlerx.Response {
 		return handlerx.Response{Data: map[string]any{"message": "Hello, World!"}}
 	}))
 
 	t.Cleanup(func() {
-		if err := app.Shutdown(); err != nil {
-			t.Errorf("shutdown error: %v", err)
-		}
+		err := app.Shutdown()
+		assert.NoError(t, err)
 	})
 
 	go func() {
 		app.Listen()
 	}()
-	time.Sleep(1 *time.Second)
+	time.Sleep(1 * time.Second)
 	res, err := http.Get("http://localhost:5090/api/data")
-	if err != nil {
-		t.Fatalf("Erro ao fazer requisição: %v", err)
-	}
-
-	if res.StatusCode != http.StatusOK {
-		t.Errorf("Esperava status %d, recebeu %d", http.StatusOK, res.StatusCode)
-	}
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, res.StatusCode)
 	t.Logf("Headers: %v", res.Header)
-	allowedOrigin := res.Header.Get("Access-Control-Allow-Origin")
-	if allowedOrigin != "https://meusite.com.br" {
-		t.Errorf("Esperava Access-Control-Allow-Origin 'https://meusite.com.br', recebeu '%s'", allowedOrigin)
-	}
+	got := res.Header.Get("Access-Control-Allow-Origin")
+	assert.Equal(t, allowedOrigin, got)
 }
 
 func setupApp() NetIORouter {
@@ -97,7 +91,7 @@ type NetIORouter interface {
 }
 
 type netioAdapter struct {
-	s   *netio.App
+	s *netio.App
 }
 
 func NetIOAdapter(port string) NetIORouter {

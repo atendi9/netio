@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/atendi9/capivara/assert"
 	"github.com/atendi9/handlerx"
 )
 
@@ -19,14 +20,8 @@ func TestContext_Status(t *testing.T) {
 	c := &Context{}
 
 	ret := c.Status(404)
-
-	if c.status != 404 {
-		t.Errorf("expected status 404, got %d", c.status)
-	}
-
-	if ret != c {
-		t.Errorf("Status should return same context for chaining")
-	}
+	assertEqual(t, c.status, 404)
+	assert.Equal(t, ret, c)
 }
 
 func TestContext_SendFile(t *testing.T) {
@@ -34,9 +29,7 @@ func TestContext_SendFile(t *testing.T) {
 	file := tmp + "/test.txt"
 
 	err := os.WriteFile(file, []byte("hello"), 0644)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
 	rw := httptest.NewRecorder()
 	c := &Context{
@@ -45,10 +38,8 @@ func TestContext_SendFile(t *testing.T) {
 	}
 
 	c.SendFile(file)
-
-	if !strings.Contains(rw.Body.String(), "hello") {
-		t.Errorf("expected file content to be sent")
-	}
+	ok := strings.Contains(rw.Body.String(), "hello")
+	assert.True(t, ok)
 }
 
 func TestContext_SendFile_Error(t *testing.T) {
@@ -60,9 +51,7 @@ func TestContext_SendFile_Error(t *testing.T) {
 
 	c.SendFile("non-existent-file")
 
-	if !strings.Contains(rw.Body.String(), "404") {
-		t.Errorf("expected status to be sent on error")
-	}
+	assert.True(t, strings.Contains(rw.Body.String(), "404"))
 }
 
 func TestContext_SendFileFromReader(t *testing.T) {
@@ -77,9 +66,8 @@ func TestContext_SendFileFromReader(t *testing.T) {
 
 	c.SendFileFromReader(reader)
 
-	if !strings.Contains(rw.Body.String(), "stream-data") {
-		t.Errorf("expected streamed data")
-	}
+	ok := strings.Contains(rw.Body.String(), "stream-data")
+	assert.True(t, ok)
 }
 
 type errorReader struct{}
@@ -127,12 +115,8 @@ func TestContext_NextAndAbort(t *testing.T) {
 	}
 
 	c.Next()
-	if c.Header("X-Test") != "1" {
-		t.Errorf("expected X-Test header to be 1, got %s", c.Header("X-Test"))
-	}
-	if !c.aborted {
-		t.Errorf("expected context to be aborted")
-	}
+	assertEqual(t, c.Header("X-Test"), "1")
+	assert.True(t, c.aborted)
 }
 
 func TestContext_reset(t *testing.T) {
@@ -143,25 +127,21 @@ func TestContext_reset(t *testing.T) {
 		index:  5,
 	}
 	c.reset()
-	if string(c.method) != "" || string(c.path) != "" || c.status != 200 || c.index != -1 {
-		t.Errorf("context reset failed")
-	}
+	ok := string(c.method) != "" || string(c.path) != "" || c.status != 200 || c.index != -1
+	assert.False(t, ok)
 }
 
 func TestContext_HeadersAndHeader(t *testing.T) {
+	jsonContentType := "application/json"
 	c := &Context{
 		header: []KV{
-			{K: []byte("Content-Type"), V: []byte("application/json")},
+			{K: []byte("Content-Type"), V: []byte(jsonContentType)},
 			{K: []byte("X-Test"), V: []byte("123")},
 		},
 	}
 	headers := c.Headers()
-	if headers["Content-Type"][0] != "application/json" {
-		t.Errorf("Headers map incorrect")
-	}
-	if c.Header("x-test") != "123" {
-		t.Errorf("Header lookup incorrect")
-	}
+	assertEqual(t, headers["Content-Type"][0], jsonContentType)
+	assertEqual(t, c.Header("x-test"), "123")
 }
 
 func TestContext_MethodAndPathAndBody(t *testing.T) {
@@ -170,48 +150,35 @@ func TestContext_MethodAndPathAndBody(t *testing.T) {
 		path:   []byte("/hello"),
 		body:   []byte(`{"a":1}`),
 	}
-	if c.Method() != "POST" {
-		t.Errorf("expected POST, got %s", c.Method())
-	}
-	if c.Path() != "/hello" {
-		t.Errorf("expected /hello, got %s", c.Path())
-	}
-	if !bytes.Equal(c.Body(), []byte(`{"a":1}`)) {
-		t.Errorf("body mismatch")
-	}
+	assertEqual(t, c.Method(), "POST")
+	assertEqual(t, c.Path(), "/hello")
+	ok := bytes.Equal(c.Body(), []byte(`{"a":1}`))
+	assert.True(t, ok)
 }
 
 func TestContext_BodyParser(t *testing.T) {
 	c := &Context{
-		body: []byte(`{"Name":"John"}`),
+		body: []byte(`{"name":"John"}`),
 	}
 	var data struct {
-		Name string
+		Name string `json:"name"`
 	}
 	if err := c.BodyParser(&data); err != nil {
 		t.Fatal(err)
 	}
-	if data.Name != "John" {
-		t.Errorf("expected John, got %s", data.Name)
-	}
-
+	assert.Equal(t, "John", data.Name)
 	cEmpty := &Context{}
 	var d struct{}
-	if err := cEmpty.BodyParser(&d); err != ErrEmptyBody {
-		t.Errorf("expected ErrEmptyBody, got %v", err)
-	}
+	err := cEmpty.BodyParser(&d)
+	assert.Equal(t, ErrEmptyBody, err)
 }
 
 func TestContext_QueryAndQueryParser(t *testing.T) {
 	c := &Context{
 		query: []KV{{K: []byte("foo"), V: []byte("bar")}},
 	}
-	if c.Query("foo") != "bar" {
-		t.Errorf("expected bar, got %s", c.Query("foo"))
-	}
-	if c.Query("missing", "default") != "default" {
-		t.Errorf("default value failed")
-	}
+	assert.Equal(t, "bar", c.Query("foo"))
+	assert.Equal(t, "default", c.Query("missing", "default"))
 
 	var q struct {
 		Foo string `query:"foo"`
@@ -219,9 +186,7 @@ func TestContext_QueryAndQueryParser(t *testing.T) {
 	if err := c.QueryParser(&q); err != nil {
 		t.Fatal(err)
 	}
-	if q.Foo != "bar" {
-		t.Errorf("query parser failed")
-	}
+	assert.Equal(t, "bar", q.Foo)
 }
 
 func TestContext_ParamsAndParamsParser(t *testing.T) {
@@ -334,6 +299,7 @@ func TestContext_HeaderSet(t *testing.T) {
 		t.Errorf("HeaderSet failed")
 	}
 }
+
 type fakeConn struct {
 	rw *httptest.ResponseRecorder
 }

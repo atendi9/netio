@@ -5,8 +5,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/atendi9/capivara/assert"
 	"github.com/atendi9/netio"
-	"github.com/atendi9/netio/cors" 
+	"github.com/atendi9/netio/cors"
 )
 
 func TestCORS_AllowedOrigin_SimpleRequest(t *testing.T) {
@@ -19,18 +20,13 @@ func TestCORS_AllowedOrigin_SimpleRequest(t *testing.T) {
 	req.Header.Set("Origin", "https://meusite.com.br")
 
 	rec := httptest.NewRecorder()
-	app.ServeHTTP(rec, req) 
+	app.ServeHTTP(rec, req)
 
 	res := rec.Result()
-
-	if res.StatusCode != http.StatusOK {
-		t.Errorf("Esperava status %d, recebeu %d", http.StatusOK, res.StatusCode)
-	}
+	assert.Equal(t, http.StatusOK, res.StatusCode)
 
 	allowedOrigin := res.Header.Get("Access-Control-Allow-Origin")
-	if allowedOrigin != "https://meusite.com.br" {
-		t.Errorf("Esperava Access-Control-Allow-Origin 'https://meusite.com.br', recebeu '%s'", allowedOrigin)
-	}
+	assert.Equal(t, "https://meusite.com.br", allowedOrigin)
 }
 
 func TestCORS_PreflightRequest(t *testing.T) {
@@ -50,10 +46,7 @@ func TestCORS_PreflightRequest(t *testing.T) {
 	app.ServeHTTP(rec, req)
 
 	res := rec.Result()
-
-	if res.StatusCode != http.StatusNoContent {
-		t.Errorf("Esperava status %d para Preflight, recebeu %d", http.StatusNoContent, res.StatusCode)
-	}
+	assert.Equal(t, http.StatusNoContent, res.StatusCode)
 
 	headers := map[string]string{
 		"Access-Control-Allow-Origin":  "https://meusite.com.br",
@@ -64,9 +57,7 @@ func TestCORS_PreflightRequest(t *testing.T) {
 
 	for key, expected := range headers {
 		actual := res.Header.Get(key)
-		if actual != expected {
-			t.Errorf("Header %s incorreto. Esperava '%s', recebeu '%s'", key, expected, actual)
-		}
+		assert.Equal(t, expected, actual)
 	}
 }
 
@@ -82,11 +73,9 @@ func TestCORS_DisallowedOrigin(t *testing.T) {
 	app.ServeHTTP(rec, req)
 
 	res := rec.Result()
-	
+
 	allowedOrigin := res.Header.Get("Access-Control-Allow-Origin")
-	if allowedOrigin != "" {
-		t.Errorf("A origem não deveria ser permitida, mas o header retornou: '%s'", allowedOrigin)
-	}
+	assert.Empty(t, allowedOrigin)
 }
 
 func TestCORS_AllowAllOrigins(t *testing.T) {
@@ -103,13 +92,11 @@ func TestCORS_AllowAllOrigins(t *testing.T) {
 	res := rec.Result()
 
 	allowedOrigin := res.Header.Get("Access-Control-Allow-Origin")
-	if allowedOrigin != "*" {
-		t.Errorf("Esperava Access-Control-Allow-Origin '*', recebeu '%s'", allowedOrigin)
-	}
+	assert.Equal(t, "*", allowedOrigin)
 }
 
 func setupApp(config cors.Config) *netio.App {
-	app, _ := netio.New(netio.AppConfig{}) 
+	app, _ := netio.New(netio.AppConfig{})
 	app.Use(cors.Middleware(config))
 	app.GET("/api/data", func(c *netio.Context) {
 		c.SendStatus(http.StatusOK)
