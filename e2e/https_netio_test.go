@@ -52,12 +52,12 @@ func TestNetIOHTTPS(t *testing.T) {
 	})
 
 	app.Use(cors.Middleware(cors.Config{
-		AllowOrigins:  allowedOrigins,
-		AllowMethods:  []string{"GET", "POST", "OPTIONS"},
-		AllowHeaders:  []string{"*"},
-		ExposeHeaders: []string{"*"},
-		MaxAge:        600,
-	}))
+    AllowedOrigins: allowedOrigins,
+    AllowedMethods: []string{"GET", "POST", "OPTIONS"},
+    AllowedHeaders: []string{"*"},
+    ExposedHeaders: []string{"*"},
+    MaxAgeSeconds:  600,
+}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
