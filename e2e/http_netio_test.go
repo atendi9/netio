@@ -40,11 +40,11 @@ func TestNetIOHTTP(t *testing.T) {
 	})
 
 	app.Use(cors.Middleware(cors.Config{
-		AllowOrigins:  allowedOrigins,
-		AllowMethods:  []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
-		AllowHeaders:  []string{"*"},
-		ExposeHeaders: []string{"*"},
-		MaxAge:        600,
+		AllowedOrigins: allowedOrigins,
+		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
+		AllowedHeaders: []string{"*"},
+		ExposedHeaders: []string{"*"},
+		MaxAgeSeconds:  600,
 	}))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -168,11 +168,11 @@ func TestAtendi9CORSConfig(t *testing.T) {
 	})
 
 	app.Use(cors.Middleware(cors.Config{
-		AllowOrigins:     []string{allowedOrigin},
-		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
-		AllowHeaders:     []string{"*"},
-		ExposeHeaders:    []string{"*"},
-		MaxAge:           3600,
+		AllowedOrigins:   []string{allowedOrigin},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
+		AllowedHeaders:   []string{"*"},
+		ExposedHeaders:   []string{"*"},
+		MaxAgeSeconds:    3600,
 		AllowCredentials: true,
 	}))
 
