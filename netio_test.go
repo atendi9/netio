@@ -8,12 +8,17 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/atendi9/capivara/assert"
 )
 
 func TestNew_EmptyPort(t *testing.T) {
@@ -348,6 +353,85 @@ func TestServe_RouteFound(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("serve did not return in time")
 	}
+}
+
+func TestServeFiles(t *testing.T) {
+	dir := t.TempDir()
+	f, err := os.Create(dir + "/test.txt")
+	assert.NoError(t, err)
+	defer f.Close()
+	msg := "Hello, NetIO!"
+	_, err = f.Write([]byte(msg))
+	assert.NoError(t, err)
+
+	t.Run("Path traversal vulnerability using NetIO http.Server", func(t *testing.T) {
+		portChan := make(chan string, 1)
+
+		app, _ := New(AppConfig{Startup: func(p string) {
+			portChan <- p
+		}})
+
+		app.ServeFiles("/static/", dir)
+		go func() {
+			app.Listen()
+		}()
+
+		port := <-portChan
+
+		url := fmt.Sprintf("http://localhost:%s/static/..%%2f..%%2fetc%%2fpasswd", port)
+		res, err := http.Get(url)
+		assert.NoError(t, err)
+		defer res.Body.Close()
+		assertEqual(t, res.StatusCode, http.StatusForbidden)
+	})
+
+	t.Run("HTTP file serving using standard http.Server", func(t *testing.T) {
+		var port string = "0"
+		app, _ := New(AppConfig{Startup: func(p string) {
+			port = p
+		}})
+
+		app.ServeFiles("/static/", dir)
+		res := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%s/static/test.txt", port), nil)
+		app.ServeHTTP(res, req)
+		assertEqual(t, res.Code, http.StatusOK)
+		assertEqual(t, res.Body.String(), msg)
+	})
+
+	t.Run("HTTP file serving using NetIO http.Server", func(t *testing.T) {
+		portChan := make(chan string, 1)
+
+		app, _ := New(AppConfig{Startup: func(p string) {
+			portChan <- p
+		}})
+
+		app.ServeFiles("/static/", dir)
+		go func() {
+			app.Listen()
+		}()
+
+		port := <-portChan
+
+		res, err := http.Get(fmt.Sprintf("http://localhost:%s/static/test.txt", port))
+		assert.NoError(t, err)
+		defer res.Body.Close()
+
+		assertEqual(t, res.StatusCode, http.StatusOK)
+
+		body, err := io.ReadAll(res.Body)
+		assert.NoError(t, err)
+
+		assertEqual(t, string(body), msg)
+	})
+}
+
+func TestDetectContentType(t *testing.T) {
+	jsonData := []byte(`{"foo":"bar"}`)
+	textData := []byte("hello world")
+	jsonContentType := "application/json"
+	assertEqual(t, detectContentType(jsonData), jsonContentType)
+	assertEqual(t, detectContentType(textData) == jsonContentType, false)
 }
 
 func TestServe_RouteNotFound(t *testing.T) {

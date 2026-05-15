@@ -1,7 +1,10 @@
 package netio
 
 import (
+	"net"
 	"testing"
+
+	"github.com/atendi9/capivara/assert"
 )
 
 func TestGroup_Post(t *testing.T) {
@@ -10,6 +13,45 @@ func TestGroup_Post(t *testing.T) {
 	if _, ok := app.root.findMethod("POST", split("/api/users"), &[]KV{}); !ok {
 		t.Error("POST route not registered")
 	}
+}
+
+func TestGroup_Execution(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0"})
+
+	var called bool
+
+	g := app.Group("/api")
+	g.Get("/users", func(c *Context) {
+		called = true
+		c.JSON(map[string]any{"message": "Hello World"})
+	})
+
+	params := []KV{}
+	h, ok := app.root.findMethod("GET", split("/api/users"), &params)
+	assert.True(t, ok)
+
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	ctx := &Context{}
+	ctx.reset()
+	ctx.conn = server
+	ctx.handlers = h
+
+	done := make(chan struct{})
+
+	go func() {
+		ctx.Next()
+		server.Close()
+		close(done)
+	}()
+
+	buf := make([]byte, 1024)
+	_, _ = client.Read(buf)
+
+	<-done
+	assert.True(t, called)
 }
 
 func TestGroup_Put(t *testing.T) {

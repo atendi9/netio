@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/atendi9/capivara/assert"
 	"github.com/atendi9/netio"
 	"github.com/atendi9/netio/cors"
 )
@@ -38,9 +39,7 @@ func TestNetIOHTTPS(t *testing.T) {
 		Startup: runTestOnStartup,
 		Port:    "0",
 	})
-	if err != nil {
-		t.Fatalf("failed to create app: %v", err)
-	}
+	assert.NoError(t, err)
 
 	allowedOrigins := []string{
 		"https://google.com",
@@ -52,11 +51,11 @@ func TestNetIOHTTPS(t *testing.T) {
 	})
 
 	app.Use(cors.Middleware(cors.Config{
-    AllowedOrigins: allowedOrigins,
-    AllowedMethods: []string{"GET", "POST", "OPTIONS"},
-    AllowedHeaders: []string{"*"},
-    ExposedHeaders: []string{"*"},
-    MaxAgeSeconds:  600,
+    AllowOrigins: allowedOrigins,
+    AllowMethods: []string{"GET", "POST", "OPTIONS"},
+    AllowHeaders: []string{"*"},
+    ExposeHeaders: []string{"*"},
+    MaxAge:  600,
 }))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -103,25 +102,16 @@ func TestNetIOHTTPS(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if err != nil {
-		t.Fatalf("failed to reach HTTPS server: %v", err)
-	}
+	assert.NoError(t, err)
 	defer res.Body.Close()
 
 	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		t.Fatalf("failed to read response: %v", err)
-	}
+	assert.NoError(t, err)
 
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("unexpected status: %d", res.StatusCode)
-	}
-	if string(body) != `{"message":"Hello World"}` {
-		t.Fatalf("unexpected body: %s", body)
-	}
-	if got := res.Header.Get("Access-Control-Allow-Origin"); got != origin {
-		t.Fatalf("expected Allow-Origin %q, got %q", origin, got)
-	}
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, `{"message":"Hello World"}`, string(body))
+	got := res.Header.Get("Access-Control-Allow-Origin")
+	assert.Equal(t, origin, got)
 }
 
 // generateTempCert generates a self-signed certificate and key and writes them to temp files.
@@ -129,9 +119,7 @@ func generateTempCert(t *testing.T) (certFile, keyFile string) {
 	t.Helper()
 
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("failed to generate private key: %v", err)
-	}
+	assert.NoError(t, err)
 
 	notBefore := time.Now()
 	notAfter := notBefore.Add(24 * time.Hour)
@@ -153,28 +141,20 @@ func generateTempCert(t *testing.T) (certFile, keyFile string) {
 	}
 
 	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
-	if err != nil {
-		t.Fatalf("failed to create certificate: %v", err)
-	}
+	assert.NoError(t, err)
 
 	certFileObj, err := os.CreateTemp("", "cert-*.crt")
-	if err != nil {
-		t.Fatalf("failed to create temp cert file: %v", err)
-	}
+	assert.NoError(t, err)
 	defer certFileObj.Close()
 
 	keyFileObj, err := os.CreateTemp("", "key-*.key")
-	if err != nil {
-		t.Fatalf("failed to create temp key file: %v", err)
-	}
+	assert.NoError(t, err)
 	defer keyFileObj.Close()
 
-	if err := pem.Encode(certFileObj, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes}); err != nil {
-		t.Fatalf("failed to write cert: %v", err)
-	}
-	if err := pem.Encode(keyFileObj, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)}); err != nil {
-		t.Fatalf("failed to write key: %v", err)
-	}
+	err = pem.Encode(certFileObj, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	assert.NoError(t, err)
+	err = pem.Encode(keyFileObj, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+	assert.NoError(t, err)
 
 	return certFileObj.Name(), keyFileObj.Name()
 }

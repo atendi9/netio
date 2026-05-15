@@ -1,48 +1,41 @@
 package netio
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
+
+	"github.com/atendi9/capivara/assert"
 )
 
 func TestSplit(t *testing.T) {
 	t.Run("slash only", func(t *testing.T) {
 		got := split("/")
-		if got != nil {
-			t.Errorf("split(\"/\") = %v, want nil", got)
-		}
+		assert.LengthSlice(t, 0, got)
 	})
 
 	t.Run("single segment", func(t *testing.T) {
 		got := split("abc")
 		want := [][]byte{{'b', 'c'}}
-		if !reflect.DeepEqual(got, want) {
-			t.Errorf("split(\"abc\") = %v, want %v", toStringSlices(got), toStringSlices(want))
-		}
+		assertEqual(t, want, got)
 	})
 
 	t.Run("one separator", func(t *testing.T) {
 		got := split("a/bcd")
 		want := [][]byte{{}, {'b', 'c', 'd'}}
-		if !reflect.DeepEqual(got, want) {
-			t.Errorf("split(\"a/bcd\") = %v, want %v", toStringSlices(got), toStringSlices(want))
-		}
+		assertEqual(t, want, got)
 	})
 
 	t.Run("trailing separator", func(t *testing.T) {
 		got := split("ab/")
 		want := [][]byte{{'b'}, {}}
-		if !reflect.DeepEqual(got, want) {
-			t.Errorf("split(\"ab/\") = %v, want %v", toStringSlices(got), toStringSlices(want))
-		}
+		assertEqual(t, want, got)
 	})
 
 	t.Run("leading separator after first char", func(t *testing.T) {
 		got := split("a/bc")
 		want := [][]byte{{}, {'b', 'c'}}
-		if !reflect.DeepEqual(got, want) {
-			t.Errorf("split(\"a/bc\") = %v, want %v", toStringSlices(got), toStringSlices(want))
-		}
+		assertEqual(t, want, got)
 	})
 }
 
@@ -111,4 +104,8 @@ func toStringSlices(slices [][]byte) [][]string {
 		}
 	}
 	return result
+}
+
+func assertEqual[T any](t testing.TB, want, got T) {
+	assert.Equal(t, fmt.Sprint(want), fmt.Sprint(got))
 }

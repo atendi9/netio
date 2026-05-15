@@ -31,10 +31,10 @@ func main() {
 	}
 
 	app.Use(cors.Middleware(cors.Config{
-		AllowedOrigins:   []string{"https://homologaatendi9.netlify.app"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "PATCH"},
-		AllowedHeaders:   []string{"apikey", "authorization"},
-		ExposedHeaders:   []string{"Accept", "Content-Type", "Authorization", "X-Request-ID", "Cache-Control", "Location", "X-Total-Count", "ETag", "X-Powered-By"},
+		AllowOrigins:   []string{"https://homologaatendi9.netlify.app"},
+		AllowMethods:   []string{"GET", "POST", "PUT", "DELETE", "PATCH"},
+		AllowHeaders:   []string{"apikey", "authorization"},
+		ExposeHeaders:   []string{"Accept", "Content-Type", "Authorization", "X-Request-ID", "Cache-Control", "Location", "X-Total-Count", "ETag", "X-Powered-By"},
 		AllowCredentials: true,
 	}))
 

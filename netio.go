@@ -7,11 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,19 +34,20 @@ const defaultReadTimeout = 60 * time.Second
 const defaultMaxConns = 1024
 
 type App struct {
-	appName     string
-	port        string
-	startFn     startFn
-	logger      Logger
-	root        *node
-	mw          []Handler
-	maxBodySize int
-	readTimeout time.Duration
-	ln          net.Listener
-	activeConns sync.WaitGroup
-	mu          sync.Mutex
-	conns       map[net.Conn]struct{}
-	connSem     chan struct{}
+	appName            string
+	port               string
+	startFn            startFn
+	logger             Logger
+	root               *node
+	mw                 []Handler
+	maxBodySize        int
+	readTimeout        time.Duration
+	ln                 net.Listener
+	activeConns        sync.WaitGroup
+	mu                 sync.Mutex
+	conns              map[net.Conn]struct{}
+	connSem            chan struct{}
+	isFirstStartupHTTP atomic.Bool
 }
 
 type MaxBodySize string
@@ -87,6 +92,8 @@ func New(config AppConfig) (*App, error) {
 		conns:       make(map[net.Conn]struct{}),
 		connSem:     make(chan struct{}, maxConns),
 	}
+
+	app.isFirstStartupHTTP.Store(true)
 
 	if config.Startup != nil {
 		app.startFn = config.Startup
@@ -173,22 +180,35 @@ func (a *App) Use(h Handler) {
 
 func (a *App) GET(path string, h ...Handler) {
 	a.root.addMethod("GET", split(path), h)
+	a.registerOptions(path)
 }
 
 func (a *App) POST(path string, h ...Handler) {
 	a.root.addMethod("POST", split(path), h)
+	a.registerOptions(path)
 }
 
 func (a *App) PUT(path string, h ...Handler) {
 	a.root.addMethod("PUT", split(path), h)
+	a.registerOptions(path)
 }
 
 func (a *App) DELETE(path string, h ...Handler) {
 	a.root.addMethod("DELETE", split(path), h)
+	a.registerOptions(path)
 }
 
 func (a *App) PATCH(path string, h ...Handler) {
 	a.root.addMethod("PATCH", split(path), h)
+	a.registerOptions(path)
+}
+
+func (a *App) registerOptions(path string) {
+	a.root.addMethod("OPTIONS", split(path), []Handler{
+		func(c *Context) {
+			c.SendStatus(http.StatusNoContent)
+		},
+	})
 }
 
 func (a *App) Listen() error {
@@ -275,6 +295,104 @@ func (a *App) closeAllConns() {
 	a.mu.Unlock()
 }
 
+// ServeFiles serves static files from the specified directory at the given endpoint.
+// For example:
+//
+//	ServeFiles("/static/", "./public")
+//
+// will serve files from the "./public" directory at the "/static/" endpoint.
+func (a *App) ServeFiles(endpoint, dirPath string) error {
+    if len(endpoint) == 0 {
+        endpoint = "/"
+    }
+    if endpoint[len(endpoint)-1] != '/' {
+        endpoint += "/"
+    }
+
+    absDirPath, err := filepath.Abs(dirPath)
+    if err != nil {
+        return err
+    }
+
+    absDirPath = filepath.Clean(absDirPath) + string(filepath.Separator)
+
+    a.GET(endpoint+":filename", func(c *Context) {
+        filename := c.Param("filename")
+
+        decodedFilename, err := url.PathUnescape(filename)
+        if err != nil {
+            c.SendStatus(http.StatusBadRequest)
+            return
+        }
+
+        fullPath := filepath.Join(absDirPath, decodedFilename)
+		
+        if !strings.HasPrefix(fullPath, absDirPath) {
+            c.SendStatus(http.StatusForbidden)
+            return
+        }
+
+        c.SendFile(fullPath)
+    })
+    return nil
+}
+
+// ServeHTTP makes the app implement Go's http.Handler interface.
+// This allows the app to be used in http.ListenAndServe.
+func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if a.isFirstStartupHTTP.Load() {
+		a.startup()
+		a.isFirstStartupHTTP.Store(false)
+	}
+	ctx := newContext()
+	ctx.appName = a.appName
+	ctx.w = w
+	ctx.r = r
+	ctx.isStdHTTP = true
+	ctx.maxBodySize = a.maxBodySize
+
+	ctx.method = []byte(r.Method)
+	ctx.path = []byte(r.URL.Path)
+
+	// Store header keys lowercased so Context.Header lookups (which
+	// lowercase the requested key) match, mirroring the raw-socket parser.
+	for k, values := range r.Header {
+		lk := strings.ToLower(k)
+		for _, v := range values {
+			ctx.header = append(ctx.header, KV{K: []byte(lk), V: []byte(v)})
+		}
+	}
+	if r.Body != nil {
+		limitReader := io.LimitReader(r.Body, int64(a.maxBodySize))
+		ctx.body, _ = io.ReadAll(limitReader)
+		r.Body.Close()
+	}
+
+	params := make([]KV, 0, 8)
+	h, ok := a.root.findMethod(r.Method, splitBytes(ctx.path), &params)
+
+	ctx.params = params
+	ctx.handlers = append([]Handler{}, a.mw...)
+
+	if ok {
+		ctx.handlers = append(ctx.handlers, h...)
+	} else if r.Method == "OPTIONS" {
+		ctx.SendStatus(http.StatusNoContent)
+		return
+	} else {
+		ctx.handlers = append(ctx.handlers, func(c *Context) {
+			c.SendStatus(http.StatusNotFound)
+		})
+	}
+
+	ctx.index = -1
+	ctx.Next()
+
+	if !ctx.wrote {
+		ctx.SendStatus(http.StatusNoContent)
+	}
+}
+
 func (a *App) serve(conn net.Conn) {
 	a.trackConn(conn, true)
 	defer func() {
@@ -315,6 +433,10 @@ func (a *App) serve(conn net.Conn) {
 
 		if ok {
 			ctx.handlers = append(ctx.handlers, h...)
+		} else if ctx.Method() == "OPTIONS" {
+			ctx.handlers = append(ctx.handlers, func(c *Context) {
+				c.SendStatus(http.StatusNoContent)
+			})
 		} else {
 			ctx.handlers = append(ctx.handlers, func(c *Context) {
 				c.SendStatus(http.StatusNotFound)

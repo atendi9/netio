@@ -40,6 +40,10 @@ type Context struct {
 	aborted  bool
 
 	status int
+
+	w         http.ResponseWriter
+	r         *http.Request
+	isStdHTTP bool
 }
 
 type KV struct {
@@ -93,6 +97,7 @@ func (c *Context) reset() {
 	c.aborted = false
 	c.status = 200
 	c.wrote = false
+	c.isStdHTTP = false
 }
 
 func (c *Context) Headers() map[string][]string {
@@ -243,6 +248,14 @@ func (c *Context) SendFile(filePath string) {
 // and using Transfer-Encoding: chunked to avoid buffering the entire payload.
 func (c *Context) SendFileFromReader(r io.ReadCloser) {
 	defer r.Close()
+	if c.isStdHTTP {
+		c.w.WriteHeader(c.status)
+		_, err := io.Copy(c.w, r)
+		if err != nil {
+			c.SendStatus(c.status)
+		}
+		return
+	}
 
 	c.HeaderSet("Transfer-Encoding", "chunked")
 	c.writeResponseWithHeaders(NewDefaultLogger(c.appName), c.status, nil)
@@ -285,6 +298,13 @@ func (c *Context) ReqHeaderParser(v any) error {
 }
 
 func (c *Context) IP() string {
+	if c.isStdHTTP {
+		host, _, err := net.SplitHostPort(c.r.RemoteAddr)
+		if err != nil {
+			return c.r.RemoteAddr
+		}
+		return host
+	}
 	host, _, err := net.SplitHostPort(c.conn.RemoteAddr().String())
 	if err != nil {
 		return c.conn.RemoteAddr().String()

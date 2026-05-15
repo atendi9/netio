@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/atendi9/capivara/assert"
 	"github.com/atendi9/netio"
 	"github.com/atendi9/netio/cors"
 )
@@ -25,9 +26,7 @@ func TestNetIOHTTP(t *testing.T) {
 	app, err := netio.New(netio.AppConfig{
 		Startup: runTestOnStartup,
 	})
-	if err != nil {
-		t.Fatalf("failed to create app: %v", err)
-	}
+	assert.NoError(t, err)
 
 	allowedOrigins := []string{
 		"https://google.com",
@@ -40,20 +39,19 @@ func TestNetIOHTTP(t *testing.T) {
 	})
 
 	app.Use(cors.Middleware(cors.Config{
-		AllowedOrigins: allowedOrigins,
-		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
-		AllowedHeaders: []string{"*"},
-		ExposedHeaders: []string{"*"},
-		MaxAgeSeconds:  600,
+		AllowOrigins: allowedOrigins,
+		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
+		AllowHeaders: []string{"*"},
+		ExposeHeaders: []string{"*"},
+		MaxAge:  600,
 	}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	t.Cleanup(func() {
 		cancel()
-		if err := app.Shutdown(ctx); err != nil {
-			t.Errorf("shutdown error: %v", err)
-		}
+		err := app.Shutdown(ctx)
+		assert.NoError(t, err)
 	})
 
 	go func() {
@@ -87,35 +85,20 @@ func TestNetIOHTTP(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if err != nil {
-		t.Fatalf("failed to reach server: %v", err)
-	}
+	assert.NoError(t, err)
 	defer res.Body.Close()
 
 	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		t.Fatalf("failed to read response: %v", err)
-	}
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, `{"message":"Hello World"}`, string(body))
+	got := res.Header.Get("Access-Control-Allow-Origin")
+	assert.Equal(t, origin, got)
+	got = res.Header.Get("Vary")
+	assert.Equal(t, "Origin, Access-Control-Request-Method, Access-Control-Request-Headers", got)
+	got = res.Header.Get("Access-Control-Expose-Headers")
+	assert.Equal(t, "*", got)
 
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("unexpected status: %d", res.StatusCode)
-	}
-
-	if string(body) != `{"message":"Hello World"}` {
-		t.Fatalf("unexpected body: %s", body)
-	}
-
-	if got := res.Header.Get("Access-Control-Allow-Origin"); got != origin {
-		t.Fatalf("expected Allow-Origin %q, got %q", origin, got)
-	}
-
-	if got := res.Header.Get("Vary"); got != "Origin, Access-Control-Request-Method, Access-Control-Request-Headers" {
-		t.Fatalf("expected Vary=Origin, got %q", got)
-	}
-
-	if got := res.Header.Get("Access-Control-Expose-Headers"); got != "*" {
-		t.Fatalf("expected Expose-Headers *, got %q", got)
-	}
 
 	preReq, _ := http.NewRequest("OPTIONS", url, nil)
 	preReq.Header.Set("Origin", origin)
@@ -123,30 +106,17 @@ func TestNetIOHTTP(t *testing.T) {
 	preReq.Header.Set("Access-Control-Request-Headers", "X-Test-Header")
 
 	preRes, err := http.DefaultClient.Do(preReq)
-	if err != nil {
-		t.Fatalf("preflight request failed: %v", err)
-	}
+	assert.NoError(t, err)
 	defer preRes.Body.Close()
-
-	if preRes.StatusCode != http.StatusNoContent {
-		t.Fatalf("expected 204 for preflight, got %d", preRes.StatusCode)
-	}
-
-	if got := preRes.Header.Get("Access-Control-Allow-Origin"); got != origin {
-		t.Fatalf("preflight: expected Allow-Origin %q, got %q", origin, got)
-	}
-
-	if got := preRes.Header.Get("Access-Control-Allow-Methods"); got == "" {
-		t.Fatal("missing Access-Control-Allow-Methods")
-	}
-
-	if got := preRes.Header.Get("Access-Control-Allow-Headers"); got != "X-Test-Header" {
-		t.Fatalf("expected echoed headers, got %q", got)
-	}
-
-	if got := preRes.Header.Get("Access-Control-Max-Age"); got != "600" {
-		t.Fatalf("expected Max-Age 600, got %q", got)
-	}
+	assert.Equal(t, http.StatusNoContent, preRes.StatusCode)
+	got = preRes.Header.Get("Access-Control-Allow-Origin")
+	assert.Equal(t, origin ,got)
+	got = preRes.Header.Get("Access-Control-Allow-Methods")
+	assert.Equal(t, "GET, POST, PUT, DELETE, PATCH, OPTIONS", got)
+	got = preRes.Header.Get("Access-Control-Allow-Headers")
+	assert.Equal(t, "X-Test-Header", got)
+	got = preRes.Header.Get("Access-Control-Max-Age")
+	assert.Equal(t, "600", got)
 }
 
 func TestAtendi9CORSConfig(t *testing.T) {
@@ -168,11 +138,11 @@ func TestAtendi9CORSConfig(t *testing.T) {
 	})
 
 	app.Use(cors.Middleware(cors.Config{
-		AllowedOrigins:   []string{allowedOrigin},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
-		AllowedHeaders:   []string{"*"},
-		ExposedHeaders:   []string{"*"},
-		MaxAgeSeconds:    3600,
+		AllowOrigins:   []string{allowedOrigin},
+		AllowMethods:   []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
+		AllowHeaders:   []string{"*"},
+		ExposeHeaders:   []string{"*"},
+		MaxAge:    3600,
 		AllowCredentials: true,
 	}))
 

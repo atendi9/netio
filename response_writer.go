@@ -21,14 +21,45 @@ func (ctx *Context) writeResponseWithHeaders(
 		return nil
 	}
 
+	if status < http.StatusContinue {
+		status = http.StatusOK
+	}
+
+	if ctx.isStdHTTP {
+		hasContentType := false
+		for _, h := range ctx.resHeader {
+			key := string(h.K)
+			if strings.EqualFold(key, "Content-Type") {
+				hasContentType = true
+			}
+			ctx.w.Header().Add(key, string(h.V))
+		}
+
+		if !hasContentType && len(body) > 0 {
+			ctx.w.Header().Set("Content-Type", detectContentType(body))
+		}
+
+		ctx.w.WriteHeader(status)
+		if len(body) > 0 {
+			ctx.w.Write(body)
+		}
+		ctx.wrote = true
+		return nil
+	}
+
 	buf := bufPool.Get().(*bytes.Buffer)
 	buf.Reset()
 	defer bufPool.Put(buf)
 
+	statusText := http.StatusText(status)
+	if statusText == "" {
+		statusText = "Unknown Status"
+	}
+
 	buf.WriteString("HTTP/1.1 ")
 	buf.WriteString(strconv.Itoa(status))
 	buf.WriteByte(' ')
-	buf.WriteString(http.StatusText(status))
+	buf.WriteString(statusText)
 	buf.WriteString("\r\n")
 
 	hasContentType := false

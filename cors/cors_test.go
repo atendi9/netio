@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/atendi9/capivara/assert"
 	"github.com/atendi9/netio"
 	"github.com/atendi9/netio/cors"
 )
@@ -90,7 +92,7 @@ func assertHeader(t *testing.T, res *http.Response, key, expected string) {
 
 func TestOriginNotAllowed(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{"https://allowed.com"},
+		AllowOrigins: []string{"https://allowed.com"},
 	})
 
 	res := get(t, url, "https://notallowed.com")
@@ -104,7 +106,7 @@ func TestOriginNotAllowed(t *testing.T) {
 
 func TestNoOriginHeader(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{"https://allowed.com"},
+		AllowOrigins: []string{"https://allowed.com"},
 	})
 
 	res := get(t, url, "")
@@ -117,7 +119,7 @@ func TestNoOriginHeader(t *testing.T) {
 
 func TestAllowAllOriginsWithoutCredentials(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{"*"},
+		AllowOrigins: []string{"*"},
 	})
 
 	res := get(t, url, "https://any.com")
@@ -128,7 +130,7 @@ func TestAllowAllOriginsWithoutCredentials(t *testing.T) {
 func TestAllowAllOriginsWithCredentials(t *testing.T) {
 	origin := "https://any.com"
 	url := startServer(t, cors.Config{
-		AllowedOrigins:   []string{"*"},
+		AllowOrigins:   []string{"*"},
 		AllowCredentials: true,
 	})
 
@@ -141,7 +143,7 @@ func TestAllowAllOriginsWithCredentials(t *testing.T) {
 func TestAllowSpecificOrigin(t *testing.T) {
 	origin := "https://allowed.com"
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{origin},
+		AllowOrigins: []string{origin},
 	})
 
 	res := get(t, url, origin)
@@ -152,7 +154,7 @@ func TestAllowSpecificOrigin(t *testing.T) {
 func TestVarySetOnlyForAllowedOrigin(t *testing.T) {
 	origin := "https://allowed.com"
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{origin},
+		AllowOrigins: []string{origin},
 	})
 
 	resAllowed := get(t, url, origin)
@@ -166,8 +168,8 @@ func TestVarySetOnlyForAllowedOrigin(t *testing.T) {
 
 func TestExposeHeadersEmitted(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{"*"},
-		ExposedHeaders: []string{"X-Request-ID", "X-Total-Count"},
+		AllowOrigins: []string{"*"},
+		ExposeHeaders: []string{"X-Request-ID", "X-Total-Count"},
 	})
 
 	res := get(t, url, "https://any.com")
@@ -177,7 +179,7 @@ func TestExposeHeadersEmitted(t *testing.T) {
 
 func TestExposeHeadersNotEmittedWhenEmpty(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{"*"},
+		AllowOrigins: []string{"*"},
 	})
 
 	res := get(t, url, "https://any.com")
@@ -187,7 +189,7 @@ func TestExposeHeadersNotEmittedWhenEmpty(t *testing.T) {
 
 func TestPreflightReturns204(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{"https://allowed.com"},
+		AllowOrigins: []string{"https://allowed.com"},
 	})
 
 	res := preflight(t, url, "https://allowed.com", "GET", "")
@@ -199,18 +201,18 @@ func TestPreflightReturns204(t *testing.T) {
 
 func TestPreflightAllowedMethodsDefault(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{"*"},
+		AllowOrigins: []string{"*"},
 	})
 
 	res := preflight(t, url, "https://any.com", "GET", "")
 
-	assertHeader(t, res, "Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+	assertHeader(t, res, "Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS")
 }
 
 func TestPreflightAllowedMethodsCustom(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{"*"},
-		AllowedMethods: []string{"GET", "POST"},
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{"GET", "POST"},
 	})
 
 	res := preflight(t, url, "https://any.com", "GET", "")
@@ -220,8 +222,8 @@ func TestPreflightAllowedMethodsCustom(t *testing.T) {
 
 func TestPreflightMaxAgeEmitted(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{"*"},
-		MaxAgeSeconds:  3600,
+		AllowOrigins: []string{"*"},
+		MaxAge:  3600,
 	})
 
 	res := preflight(t, url, "https://any.com", "GET", "")
@@ -231,8 +233,8 @@ func TestPreflightMaxAgeEmitted(t *testing.T) {
 
 func TestPreflightMaxAgeNotEmittedWhenZero(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{"*"},
-		MaxAgeSeconds:  0,
+		AllowOrigins: []string{"*"},
+		MaxAge:  0,
 	})
 
 	res := preflight(t, url, "https://any.com", "GET", "")
@@ -242,8 +244,8 @@ func TestPreflightMaxAgeNotEmittedWhenZero(t *testing.T) {
 
 func TestAllowHeadersWildcardEchosRequestHeaders(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{"*"},
-		AllowedHeaders: []string{"*"},
+		AllowOrigins: []string{"*"},
+		AllowHeaders: []string{"*"},
 	})
 
 	res := preflight(t, url, "https://any.com", "GET", "apikey, authorization")
@@ -253,8 +255,8 @@ func TestAllowHeadersWildcardEchosRequestHeaders(t *testing.T) {
 
 func TestAllowHeadersWildcardWithNoRequestHeaders(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{"*"},
-		AllowedHeaders: []string{"*"},
+		AllowOrigins: []string{"*"},
+		AllowHeaders: []string{"*"},
 	})
 
 	res := preflight(t, url, "https://any.com", "GET", "")
@@ -264,8 +266,8 @@ func TestAllowHeadersWildcardWithNoRequestHeaders(t *testing.T) {
 
 func TestAllowHeadersExplicitJoined(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{"*"},
-		AllowedHeaders: []string{"apikey", "authorization"},
+		AllowOrigins: []string{"*"},
+		AllowHeaders: []string{"apikey", "authorization"},
 	})
 
 	res := preflight(t, url, "https://any.com", "GET", "apikey")
@@ -275,10 +277,106 @@ func TestAllowHeadersExplicitJoined(t *testing.T) {
 
 func TestAllowHeadersEmptyConfigEchosRequestHeaders(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowedOrigins: []string{"*"},
+		AllowOrigins: []string{"*"},
 	})
 
 	res := preflight(t, url, "https://any.com", "GET", "x-custom-header")
 
 	assertHeader(t, res, "Access-Control-Allow-Headers", "x-custom-header")
+}
+
+func TestCORS_AllowedOrigin_SimpleRequest(t *testing.T) {
+	app := setupApp(cors.Config{
+		AllowOrigins: []string{"https://meusite.com.br"},
+		AllowMethods: []string{"GET"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
+	req.Header.Set("Origin", "https://meusite.com.br")
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+
+	res := rec.Result()
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+
+	allowedOrigin := res.Header.Get("Access-Control-Allow-Origin")
+	assert.Equal(t, "https://meusite.com.br", allowedOrigin)
+}
+
+func TestCORS_PreflightRequest(t *testing.T) {
+	app := setupApp(cors.Config{
+		AllowOrigins: []string{"https://meusite.com.br"},
+		AllowMethods: []string{"POST", "GET", "OPTIONS"},
+		AllowHeaders: []string{"Authorization", "Content-Type"},
+		MaxAge:       86400,
+	})
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/data", nil)
+	req.Header.Set("Origin", "https://meusite.com.br")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers", "Authorization")
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+
+	res := rec.Result()
+	assert.Equal(t, http.StatusNoContent, res.StatusCode)
+
+	headers := map[string]string{
+		"Access-Control-Allow-Origin":  "https://meusite.com.br",
+		"Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+		"Access-Control-Allow-Headers": "Authorization, Content-Type",
+		"Access-Control-Max-Age":       "86400",
+	}
+
+	for key, expected := range headers {
+		actual := res.Header.Get(key)
+		assert.Equal(t, expected, actual)
+	}
+}
+
+func TestCORS_DisallowedOrigin(t *testing.T) {
+	app := setupApp(cors.Config{
+		AllowOrigins: []string{"https://meusite.com.br"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
+	req.Header.Set("Origin", "https://site-malicioso.com")
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+
+	res := rec.Result()
+
+	allowedOrigin := res.Header.Get("Access-Control-Allow-Origin")
+	assert.Empty(t, allowedOrigin)
+}
+
+func TestCORS_AllowAllOrigins(t *testing.T) {
+	app := setupApp(cors.Config{
+		AllowOrigins: []string{"*"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/data", nil)
+	req.Header.Set("Origin", "https://qualqueresite.com")
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+
+	res := rec.Result()
+
+	allowedOrigin := res.Header.Get("Access-Control-Allow-Origin")
+	assert.Equal(t, "*", allowedOrigin)
+}
+
+func setupApp(config cors.Config) *netio.App {
+	app, _ := netio.New(netio.AppConfig{})
+	app.Use(cors.Middleware(config))
+	app.GET("/api/data", func(c *netio.Context) {
+		c.SendStatus(http.StatusOK)
+		c.Send([]byte("sucesso"))
+	})
+
+	return app
 }
