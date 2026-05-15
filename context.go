@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net"
@@ -12,11 +13,9 @@ import (
 	"os"
 	"reflect"
 	"strings"
-	"sync"
 	"time"
 )
 
-// Context represents a single HTTP request/response cycle.
 type Context struct {
 	conn net.Conn
 
@@ -43,25 +42,30 @@ type Context struct {
 	status int
 }
 
-// KV represents a key-value pair.
 type KV struct {
 	K []byte
 	V []byte
 }
 
-var ctxPool = sync.Pool{
-	New: func() any {
-		return &Context{
-			params: make([]KV, 0, 8),
-			query:  make([]KV, 0, 8),
-			header: make([]KV, 0, 16),
-		}
-	},
+// newContext allocates a fresh per-request Context.
+//
+// Each request gets its own Context (rather than one recycled from a pool)
+// so a handler that retains the *Context — or spawns a goroutine using it —
+// is never exposed to data from a later request on the same keep-alive
+// connection. The pre-sized slices keep the common case allocation-light.
+func newContext() *Context {
+	return &Context{
+		params:    make([]KV, 0, 8),
+		query:     make([]KV, 0, 8),
+		header:    make([]KV, 0, 16),
+		resHeader: make([]KV, 0, 8),
+		status:    http.StatusOK,
+		index:     -1,
+	}
 }
 
 var ErrAborted = errors.New("aborted")
 
-// Next executes the next handler in the Context's handler chain.
 func (c *Context) Next() error {
 	c.index++
 	for c.index < len(c.handlers) {
@@ -74,7 +78,6 @@ func (c *Context) Next() error {
 	return nil
 }
 
-// Abort stops the execution of the remaining handlers.
 func (c *Context) Abort() { c.aborted = true }
 
 func (c *Context) reset() {
@@ -92,7 +95,6 @@ func (c *Context) reset() {
 	c.wrote = false
 }
 
-// Headers returns all request headers as a map.
 func (c *Context) Headers() map[string][]string {
 	h := make(map[string][]string, len(c.header))
 	for _, kv := range c.header {
@@ -102,23 +104,20 @@ func (c *Context) Headers() map[string][]string {
 	return h
 }
 
-// Header returns the first value for the given header key.
 func (c *Context) Header(key string) string {
 	key = strings.ToLower(key)
 	for _, kv := range c.header {
-		if strings.ToLower(string(kv.K)) == key {
+		if string(kv.K) == key {
 			return string(kv.V)
 		}
 	}
 	return ""
 }
 
-// Method returns the HTTP method of the request as a string.
 func (c *Context) Method() string {
 	return string(c.method)
 }
 
-// Path returns the request path, or a default value if empty.
 func (c *Context) Path(defaultValue ...string) string {
 	if len(c.path) > 0 {
 		return string(c.path)
@@ -129,14 +128,23 @@ func (c *Context) Path(defaultValue ...string) string {
 	return ""
 }
 
-// Body returns the raw request body.
+// Body returns a copy of the request body.
+//
+// A copy is returned (rather than the internal buffer) so a handler may
+// safely retain the result — or hand it to a spawned goroutine — without
+// risking mutation by request parsing. Header/Params/Query lookups already
+// return string copies and are likewise safe to retain.
 func (c *Context) Body() []byte {
-	return c.body
+	if len(c.body) == 0 {
+		return nil
+	}
+	cp := make([]byte, len(c.body))
+	copy(cp, c.body)
+	return cp
 }
 
 var ErrEmptyBody = errors.New("empty body")
 
-// BodyParser parses the request body JSON into the given destination.
 func (c *Context) BodyParser(v any) error {
 	if len(c.body) == 0 {
 		return ErrEmptyBody
@@ -144,7 +152,6 @@ func (c *Context) BodyParser(v any) error {
 	return json.Unmarshal(c.body, v)
 }
 
-// Query returns a query parameter value or a default if missing.
 func (c *Context) Query(name string, defaultValue ...string) string {
 	for _, kv := range c.query {
 		if string(kv.K) == name {
@@ -157,7 +164,6 @@ func (c *Context) Query(name string, defaultValue ...string) string {
 	return ""
 }
 
-// QueryParser parses query parameters into a struct using `query` tags.
 func (c *Context) QueryParser(v any) error {
 	values := make(url.Values)
 	for _, kv := range c.query {
@@ -203,7 +209,6 @@ func mapToStruct(values url.Values, tag string, dst any) error {
 	return nil
 }
 
-// Params returns a path parameter value or a default if missing.
 func (c *Context) Params(name string, defaultValue ...string) string {
 	for _, kv := range c.params {
 		if string(kv.K) == name {
@@ -216,46 +221,53 @@ func (c *Context) Params(name string, defaultValue ...string) string {
 	return ""
 }
 
-// Status sets the HTTP status code for the response.
-//
-// It returns the current Context instance to allow method chaining.
-//
-// Example:
-//
-//	ctx.Status(200).Send([]byte("ok"))
 func (c *Context) Status(statusCode int) *Context {
 	c.status = statusCode
 	return c
 }
 
-// SendFile reads a file from the given path and sends its content as the response.
-//
-// If the file cannot be read, it sends the current status code without a body.
 func (c *Context) SendFile(filePath string) {
 	b, err := os.ReadFile(filePath)
 	if err != nil {
-		c.SendStatus(c.status)
+		if os.IsNotExist(err) {
+			c.SendStatus(http.StatusNotFound)
+		} else {
+			c.SendStatus(http.StatusInternalServerError)
+		}
 		return
 	}
 	c.Send(b)
 }
 
-// SendFileFromReader streams data directly to the underlying connection.
-//
-// It uses io.Copy with net.Conn, which is efficient and avoids buffering the
-// entire content in memory. Suitable for large payloads.
-//
-// The reader is closed after the operation.
+// SendFileFromReader streams a file from a reader, writing HTTP headers first
+// and using Transfer-Encoding: chunked to avoid buffering the entire payload.
 func (c *Context) SendFileFromReader(r io.ReadCloser) {
 	defer r.Close()
 
-	_, err := io.Copy(c.conn, r)
-	if err != nil {
-		c.SendStatus(c.status)
+	c.HeaderSet("Transfer-Encoding", "chunked")
+	c.writeResponseWithHeaders(NewDefaultLogger(c.appName), c.status, nil)
+
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			if _, err := fmt.Fprintf(c.conn, "%x\r\n", n); err != nil {
+				return
+			}
+			if _, err := c.conn.Write(buf[:n]); err != nil {
+				return
+			}
+			if _, err := c.conn.Write([]byte("\r\n")); err != nil {
+				return
+			}
+		}
+		if readErr != nil {
+			break
+		}
 	}
+	c.conn.Write([]byte("0\r\n\r\n"))
 }
 
-// ParamsParser parses path parameters into a struct using `param` tags.
 func (c *Context) ParamsParser(v any) error {
 	values := make(url.Values)
 	for _, kv := range c.params {
@@ -264,7 +276,6 @@ func (c *Context) ParamsParser(v any) error {
 	return mapToStruct(values, "param", v)
 }
 
-// ReqHeaderParser parses headers into a struct using `header` tags.
 func (c *Context) ReqHeaderParser(v any) error {
 	values := make(url.Values)
 	for _, kv := range c.header {
@@ -273,7 +284,6 @@ func (c *Context) ReqHeaderParser(v any) error {
 	return mapToStruct(values, "header", v)
 }
 
-// IP returns the remote IP address of the connection.
 func (c *Context) IP() string {
 	host, _, err := net.SplitHostPort(c.conn.RemoteAddr().String())
 	if err != nil {
@@ -282,7 +292,6 @@ func (c *Context) IP() string {
 	return host
 }
 
-// IPs returns a slice of IPs from X-Forwarded-For or the remote IP.
 func (c *Context) IPs() []string {
 	xff := c.Header("X-Forwarded-For")
 	if xff == "" {
@@ -296,56 +305,36 @@ func (c *Context) IPs() []string {
 	return parts
 }
 
-// SendStatus sends an HTTP response with the given status code.
 func (c *Context) SendStatus(status int) error {
 	c.status = status
-	c.Send(nil)
-	return nil
+	return c.Send(nil)
 }
 
-// Send writes raw data to the response.
 func (c *Context) Send(data []byte) error {
-	c.writeResponseWithHeaders(NewDefaultLogger(c.appName), c.status, data)
-	return nil
+	return c.writeResponseWithHeaders(NewDefaultLogger(c.appName), c.status, data)
 }
 
-// JSON sends a JSON response.
 func (c *Context) JSON(data any) error {
 	b, err := json.Marshal(data)
 	if err != nil {
 		return err
 	}
-	c.Send(b)
-	return nil
+	return c.Send(b)
 }
 
-// Now returns the current time.
 func (c *Context) Now() time.Time {
 	return time.Now()
 }
 
-// Param returns a single path parameter by key.
+// Param is an alias for Params without default value support.
 func (c *Context) Param(key string) string {
-	for i := range c.params {
-		if bytes.Equal(c.params[i].K, []byte(key)) {
-			return string(c.params[i].V)
-		}
-	}
-	return ""
+	return c.Params(key)
 }
 
 var ErrFormFileNotFound = errors.New("form file not found")
 
-// FormFile retrieves an uploaded file from a multipart/form request.
 func (c *Context) FormFile(key string) (*multipart.FileHeader, error) {
-	req, err := http.NewRequest(
-		c.Method(),
-		"/",
-		bytes.NewReader(c.body),
-	)
-	if err != nil {
-		return nil, err
-	}
+	req, _ := http.NewRequest(c.Method(), "/", bytes.NewReader(c.body))
 
 	for _, kv := range c.header {
 		req.Header.Add(string(kv.K), string(kv.V))
@@ -368,12 +357,23 @@ func (c *Context) FormFile(key string) (*multipart.FileHeader, error) {
 	return nil, ErrFormFileNotFound
 }
 
-// HeaderSet sets or replaces a header in the Context.
 func (c *Context) HeaderSet(key, value string) {
 	lkey := strings.ToLower(key)
 	for i := 0; i < len(c.resHeader); i++ {
 		if strings.ToLower(string(c.resHeader[i].K)) == lkey {
 			c.resHeader[i].V = []byte(value)
+			return
+		}
+	}
+	c.resHeader = append(c.resHeader, KV{K: []byte(key), V: []byte(value)})
+}
+
+func (c *Context) HeaderAppend(key, value string) {
+	lkey := strings.ToLower(key)
+	for i := 0; i < len(c.resHeader); i++ {
+		if strings.ToLower(string(c.resHeader[i].K)) == lkey {
+			c.resHeader[i].V = append(c.resHeader[i].V, ',', ' ')
+			c.resHeader[i].V = append(c.resHeader[i].V, []byte(value)...)
 			return
 		}
 	}
