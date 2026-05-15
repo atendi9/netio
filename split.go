@@ -1,7 +1,11 @@
 package netio
 
 func split(p string) [][]byte {
-	if p == "/" {
+	return splitBytes([]byte(p))
+}
+
+func splitBytes(p []byte) [][]byte {
+	if len(p) <= 1 {
 		return nil
 	}
 
@@ -10,7 +14,7 @@ func split(p string) [][]byte {
 
 	for i := 1; i <= len(p); i++ {
 		if i == len(p) || p[i] == '/' {
-			res = append(res, []byte(p[start:i]))
+			res = append(res, p[start:i])
 			start = i + 1
 		}
 	}
