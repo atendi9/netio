@@ -2,24 +2,38 @@ package netio
 
 import (
 	"bytes"
-	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 )
+
+var bufPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
 
 func (ctx *Context) writeResponseWithHeaders(
 	logger Logger,
 	status int,
 	body []byte,
-) {
-	var buf bytes.Buffer
+) error {
+	if ctx.wrote {
+		return nil
+	}
+
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
 
 	buf.WriteString("HTTP/1.1 ")
 	buf.WriteString(strconv.Itoa(status))
-	buf.WriteString(" OK\r\n")
+	buf.WriteByte(' ')
+	buf.WriteString(http.StatusText(status))
+	buf.WriteString("\r\n")
 
 	hasContentType := false
 	hasContentLength := false
+	hasTransferEncoding := false
 	for _, h := range ctx.resHeader {
 		key := string(h.K)
 		value := string(h.V)
@@ -28,6 +42,9 @@ func (ctx *Context) writeResponseWithHeaders(
 		}
 		if strings.EqualFold(key, "Content-Length") {
 			hasContentLength = true
+		}
+		if strings.EqualFold(key, "Transfer-Encoding") {
+			hasTransferEncoding = true
 		}
 		buf.WriteString(key)
 		buf.WriteString(": ")
@@ -42,7 +59,8 @@ func (ctx *Context) writeResponseWithHeaders(
 		buf.WriteString("\r\n")
 	}
 
-	if !hasContentLength {
+	// RFC 7230: MUST NOT send Content-Length with Transfer-Encoding
+	if !hasContentLength && !hasTransferEncoding {
 		buf.WriteString("Content-Length: ")
 		buf.WriteString(strconv.Itoa(len(body)))
 		buf.WriteString("\r\n")
@@ -52,7 +70,13 @@ func (ctx *Context) writeResponseWithHeaders(
 
 	buf.Write(body)
 	responseBytes := buf.Bytes()
-	logger(fmt.Sprintf("writing response: %s", string(responseBytes)))
-	ctx.conn.Write(responseBytes)
+
+	// Log only the headers (truncate at the blank line before body)
+	if idx := bytes.Index(responseBytes, []byte("\r\n\r\n")); idx != -1 {
+		logger(string(responseBytes[:idx+4]))
+	}
+
+	_, err := ctx.conn.Write(responseBytes)
 	ctx.wrote = true
+	return err
 }
