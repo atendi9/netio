@@ -11,15 +11,6 @@ import (
 var ErrInvalidCertKeyPaths = errors.New("certPath and keyPath must be provided")
 
 // ListenHTTPS starts an HTTPS server using the provided certificate and key files.
-//
-// Parameters:
-//   - certPath: path to the PEM-encoded certificate file.
-//   - keyPath: path to the PEM-encoded private key file.
-//
-// Usage:
-//
-//	app := netio.New(AppConfig{Port: "443"})
-//	err := app.ListenHTTPS("server.crt", "server.key")
 func (a *App) ListenHTTPS(certPath, keyPath string) error {
 	if certPath == "" || keyPath == "" {
 		return ErrInvalidCertKeyPaths
@@ -34,6 +25,7 @@ func (a *App) ListenHTTPS(certPath, keyPath string) error {
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS13,
 	}
+
 	ln, err := net.Listen("tcp", ":"+a.port)
 	if err != nil {
 		return fmt.Errorf("failed to listen on port %s: %w", a.port, err)
@@ -50,12 +42,5 @@ func (a *App) ListenHTTPS(certPath, keyPath string) error {
 
 	a.startup()
 
-	for {
-		conn, err := tlsListener.Accept()
-		if err != nil {
-			return fmt.Errorf("failed to accept connection: %w", err)
-		}
-
-		go a.serve(conn)
-	}
+	return a.acceptLoop(tlsListener)
 }
