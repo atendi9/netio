@@ -1,0 +1,7 @@
+# Coverage artifacts
+coverage.out
+coverage_int.out
+coverage.html
+
+# Local ai-jail sandbox configuration
+.ai-jail

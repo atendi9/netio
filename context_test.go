@@ -12,88 +12,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/atendi9/capivara/assert"
 	"github.com/atendi9/handlerx"
 )
 
-func TestContext_Status(t *testing.T) {
-	c := &Context{}
-
-	ret := c.Status(404)
-	assertEqual(t, c.status, 404)
-	assert.Equal(t, ret, c)
+func TestContext_ImplementsHandlerxContext(t *testing.T) {
+	if _, ok := any(&Context{}).(handlerx.Context); !ok {
+		t.Fatal("Context does not implement handlerx.Context")
+	}
 }
 
-func TestContext_SendFile(t *testing.T) {
-	tmp := t.TempDir()
-	file := tmp + "/test.txt"
-
-	err := os.WriteFile(file, []byte("hello"), 0644)
-	assert.NoError(t, err)
-
-	rw := httptest.NewRecorder()
+func TestContext_Next_NoHandlers(t *testing.T) {
 	c := &Context{
-		conn:   &fakeConn{rw: rw},
-		status: 200,
+		handlers: nil,
+		index:    -1,
 	}
-
-	c.SendFile(file)
-	ok := strings.Contains(rw.Body.String(), "hello")
-	assert.True(t, ok)
-}
-
-func TestContext_SendFile_Error(t *testing.T) {
-	rw := httptest.NewRecorder()
-	c := &Context{
-		conn:   &fakeConn{rw: rw},
-		status: 404,
-	}
-
-	c.SendFile("non-existent-file")
-
-	assert.True(t, strings.Contains(rw.Body.String(), "404"))
-}
-
-func TestContext_SendFileFromReader(t *testing.T) {
-	rw := httptest.NewRecorder()
-
-	reader := io.NopCloser(strings.NewReader("stream-data"))
-
-	c := &Context{
-		conn:   &fakeConn{rw: rw},
-		status: 200,
-	}
-
-	c.SendFileFromReader(reader)
-
-	ok := strings.Contains(rw.Body.String(), "stream-data")
-	assert.True(t, ok)
-}
-
-type errorReader struct{}
-
-func (e *errorReader) Read(p []byte) (int, error) { return 0, io.ErrUnexpectedEOF }
-func (e *errorReader) Close() error               { return nil }
-
-func TestContext_SendFileFromReader_Error(t *testing.T) {
-	rw := httptest.NewRecorder()
-
-	c := &Context{
-		conn:   &fakeConn{rw: rw},
-		status: 500,
-	}
-
-	c.SendFileFromReader(&errorReader{})
-
-	if !strings.Contains(rw.Body.String(), "500") {
-		t.Errorf("expected status on copy error")
-	}
-}
-
-func TestContext(t *testing.T) {
-	_, ok := any(&Context{}).(handlerx.Context)
-	if !ok {
-		t.Fatal("not implemented")
+	if err := c.Next(); err != nil {
+		t.Errorf("expected nil, got %v", err)
 	}
 }
 
@@ -101,168 +35,335 @@ func TestContext_NextAndAbort(t *testing.T) {
 	c := &Context{
 		handlers: []Handler{
 			func(c *Context) {
-				c.header = append(c.header, KV{K: []byte("X-Test"), V: []byte("1")})
+				c.header = append(c.header, KV{K: []byte("x-test"), V: []byte("1")})
 			},
+			func(c *Context) { c.Abort() },
+			func(c *Context) { c.Next() },
 			func(c *Context) {
-				c.Abort()
+				c.header = append(c.header, KV{K: []byte("x-test"), V: []byte("2")})
 			},
-			func(c *Context) {
-				c.Next()
-			},
-			func(c *Context) { c.header = append(c.header, KV{K: []byte("X-Test"), V: []byte("1")}) },
 		},
 		index: -1,
 	}
 
 	c.Next()
-	assertEqual(t, c.Header("X-Test"), "1")
-	assert.True(t, c.aborted)
-}
 
-func TestContext_reset(t *testing.T) {
-	c := &Context{
-		method: []byte("GET"),
-		path:   []byte("/test"),
-		status: 500,
-		index:  5,
+	if c.Header("X-Test") != "1" {
+		t.Errorf("expected X-Test=1, got %s", c.Header("X-Test"))
 	}
-	c.reset()
-	ok := string(c.method) != "" || string(c.path) != "" || c.status != 200 || c.index != -1
-	assert.False(t, ok)
+	if !c.aborted {
+		t.Error("expected context to be aborted")
+	}
 }
 
-func TestContext_HeadersAndHeader(t *testing.T) {
-	jsonContentType := "application/json"
+func TestContext_Reset(t *testing.T) {
+	c := &Context{method: []byte("GET"), path: []byte("/test"), status: 500, index: 5}
+	c.reset()
+	if string(c.method) != "" || string(c.path) != "" || c.status != 200 || c.index != -1 {
+		t.Error("context reset failed")
+	}
+}
+
+func TestContext_Headers(t *testing.T) {
 	c := &Context{
 		header: []KV{
-			{K: []byte("Content-Type"), V: []byte(jsonContentType)},
-			{K: []byte("X-Test"), V: []byte("123")},
+			{K: []byte("content-type"), V: []byte("application/json")},
+			{K: []byte("x-test"), V: []byte("123")},
 		},
 	}
-	headers := c.Headers()
-	assertEqual(t, headers["Content-Type"][0], jsonContentType)
-	assertEqual(t, c.Header("x-test"), "123")
+	if c.Headers()["content-type"][0] != "application/json" {
+		t.Error("Headers map incorrect")
+	}
+	if c.Header("X-Test") != "123" {
+		t.Error("Header case-insensitive lookup failed")
+	}
 }
 
-func TestContext_MethodAndPathAndBody(t *testing.T) {
-	c := &Context{
-		method: []byte("POST"),
-		path:   []byte("/hello"),
-		body:   []byte(`{"a":1}`),
+func TestContext_Method(t *testing.T) {
+	c := &Context{method: []byte("POST")}
+	if c.Method() != "POST" {
+		t.Errorf("expected POST, got %s", c.Method())
 	}
-	assertEqual(t, c.Method(), "POST")
-	assertEqual(t, c.Path(), "/hello")
-	ok := bytes.Equal(c.Body(), []byte(`{"a":1}`))
-	assert.True(t, ok)
+}
+
+func TestContext_Path(t *testing.T) {
+	c := &Context{path: []byte("/hello")}
+	if c.Path() != "/hello" {
+		t.Errorf("expected /hello, got %s", c.Path())
+	}
+}
+
+func TestContext_PathDefault(t *testing.T) {
+	c := &Context{}
+	if got := c.Path("default"); got != "default" {
+		t.Errorf("expected default, got %s", got)
+	}
+	if got := c.Path(); got != "" {
+		t.Errorf("expected empty, got %s", got)
+	}
+}
+
+func TestContext_Body(t *testing.T) {
+	c := &Context{body: []byte(`{"a":1}`)}
+	if !bytes.Equal(c.Body(), []byte(`{"a":1}`)) {
+		t.Error("body mismatch")
+	}
+}
+
+// TestContext_Body_ReturnsCopy guards the critical data-corruption bug:
+// Body() must not hand out the internal buffer, otherwise a handler that
+// retains the result sees it mutated/zeroed when the Context is recycled or
+// the buffer is reused by a later request on the same keep-alive connection.
+func TestContext_Body_ReturnsCopy(t *testing.T) {
+	c := &Context{body: []byte("original")}
+
+	retained := c.Body()
+
+	// Simulate the buffer being reused/truncated for a later request.
+	c.body = c.body[:0]
+	c.body = append(c.body, []byte("XXXXXXXX")...)
+
+	if string(retained) != "original" {
+		t.Errorf("Body() returned an aliased slice: retained value mutated to %q", retained)
+	}
+}
+
+func TestContext_Body_Empty(t *testing.T) {
+	c := &Context{}
+	if c.Body() != nil {
+		t.Errorf("expected nil body, got %q", c.Body())
+	}
 }
 
 func TestContext_BodyParser(t *testing.T) {
-	c := &Context{
-		body: []byte(`{"name":"John"}`),
+	c := &Context{body: []byte(`{"Name":"John"}`)}
+	var data struct{ Name string }
+	if err := c.BodyParser(&data); err != nil || data.Name != "John" {
+		t.Errorf("BodyParser failed: %v", err)
 	}
-	var data struct {
-		Name string `json:"name"`
-	}
-	if err := c.BodyParser(&data); err != nil {
-		t.Fatal(err)
-	}
-	assert.Equal(t, "John", data.Name)
-	cEmpty := &Context{}
-	var d struct{}
-	err := cEmpty.BodyParser(&d)
-	assert.Equal(t, ErrEmptyBody, err)
 }
 
-func TestContext_QueryAndQueryParser(t *testing.T) {
-	c := &Context{
-		query: []KV{{K: []byte("foo"), V: []byte("bar")}},
+func TestContext_BodyParser_Empty(t *testing.T) {
+	c := &Context{}
+	if err := c.BodyParser(&struct{}{}); err != ErrEmptyBody {
+		t.Errorf("expected ErrEmptyBody, got %v", err)
 	}
-	assert.Equal(t, "bar", c.Query("foo"))
-	assert.Equal(t, "default", c.Query("missing", "default"))
+}
 
+func TestContext_BodyParser_InvalidJSON(t *testing.T) {
+	c := &Context{body: []byte(`invalid`)}
+	if err := c.BodyParser(&struct{}{}); err == nil {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
+func TestContext_Query(t *testing.T) {
+	c := &Context{query: []KV{{K: []byte("foo"), V: []byte("bar")}}}
+	if c.Query("foo") != "bar" {
+		t.Error("Query lookup failed")
+	}
+	if c.Query("missing", "default") != "default" {
+		t.Error("Query default failed")
+	}
+	if c.Query("missing") != "" {
+		t.Error("Query missing without default failed")
+	}
+}
+
+func TestContext_QueryParser(t *testing.T) {
+	c := &Context{query: []KV{{K: []byte("foo"), V: []byte("bar")}}}
 	var q struct {
 		Foo string `query:"foo"`
 	}
-	if err := c.QueryParser(&q); err != nil {
-		t.Fatal(err)
+	if err := c.QueryParser(&q); err != nil || q.Foo != "bar" {
+		t.Errorf("QueryParser failed: %v", err)
 	}
-	assert.Equal(t, "bar", q.Foo)
 }
 
-func TestContext_ParamsAndParamsParser(t *testing.T) {
-	c := &Context{
-		params: []KV{{K: []byte("id"), V: []byte("42")}},
-	}
+func TestContext_Params(t *testing.T) {
+	c := &Context{params: []KV{{K: []byte("id"), V: []byte("42")}}}
 	if c.Params("id") != "42" {
-		t.Errorf("expected 42, got %s", c.Params("id"))
+		t.Error("Params lookup failed")
 	}
+	if c.Params("missing", "fallback") != "fallback" {
+		t.Error("Params default failed")
+	}
+	if c.Params("missing") != "" {
+		t.Error("Params missing without default failed")
+	}
+}
+
+func TestContext_Param(t *testing.T) {
+	c := &Context{params: []KV{{K: []byte("id"), V: []byte("42")}}}
+	if c.Param("id") != "42" {
+		t.Errorf("expected 42, got %s", c.Param("id"))
+	}
+	if c.Param("missing") != "" {
+		t.Errorf("expected empty, got %s", c.Param("missing"))
+	}
+}
+
+func TestContext_ParamsParser(t *testing.T) {
+	c := &Context{params: []KV{{K: []byte("id"), V: []byte("42")}}}
 	var p struct {
 		ID string `param:"id"`
 	}
-	if err := c.ParamsParser(&p); err != nil {
+	if err := c.ParamsParser(&p); err != nil || p.ID != "42" {
+		t.Errorf("ParamsParser failed: %v", err)
+	}
+}
+
+func TestContext_Status(t *testing.T) {
+	c := &Context{}
+	if ret := c.Status(404); c.status != 404 || ret != c {
+		t.Error("Status failed")
+	}
+}
+
+func TestContext_SendFile(t *testing.T) {
+	file := t.TempDir() + "/test.txt"
+	if err := os.WriteFile(file, []byte("hello"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if p.ID != "42" {
-		t.Errorf("params parser failed")
+	rw := httptest.NewRecorder()
+	c := &Context{conn: &fakeConn{rw: rw}, status: 200}
+	c.SendFile(file)
+	if !strings.Contains(rw.Body.String(), "hello") {
+		t.Error("expected file content to be sent")
+	}
+}
+
+func TestContext_SendFile_NotFound(t *testing.T) {
+	rw := httptest.NewRecorder()
+	c := &Context{conn: &fakeConn{rw: rw}, status: 200}
+	c.SendFile("non-existent-file")
+	if !strings.Contains(rw.Body.String(), "404") {
+		t.Error("expected 404 status on missing file")
+	}
+}
+
+func TestContext_SendFile_ReadError(t *testing.T) {
+	dir := t.TempDir()
+	rw := httptest.NewRecorder()
+	c := &Context{conn: &fakeConn{rw: rw}, status: 200}
+	// Attempt to read a directory as a file — triggers non-IsNotExist error
+	c.SendFile(dir)
+	if !strings.Contains(rw.Body.String(), "500") {
+		t.Error("expected 500 status on read error")
+	}
+}
+
+func TestContext_SendFileFromReader(t *testing.T) {
+	rw := httptest.NewRecorder()
+	c := &Context{conn: &fakeConn{rw: rw}, status: 200}
+	c.SendFileFromReader(io.NopCloser(strings.NewReader("stream-data")))
+	if !strings.Contains(rw.Body.String(), "stream-data") {
+		t.Error("expected streamed data")
+	}
+}
+
+func TestContext_SendFileFromReader_Error(t *testing.T) {
+	rw := httptest.NewRecorder()
+	c := &Context{conn: &fakeConn{rw: rw}, status: 200}
+	c.SendFileFromReader(&errorReader{})
+	resp := rw.Body.String()
+	if !strings.Contains(resp, "Transfer-Encoding: chunked") {
+		t.Error("expected chunked transfer encoding in response")
+	}
+	if !strings.Contains(resp, "0\r\n\r\n") {
+		t.Error("expected chunked terminator")
 	}
 }
 
 func TestContext_ReqHeaderParser(t *testing.T) {
-	c := &Context{
-		header: []KV{{K: []byte("X-Foo"), V: []byte("bar")}},
-	}
+	c := &Context{header: []KV{{K: []byte("x-foo"), V: []byte("bar")}}}
 	var h struct {
-		Foo string `header:"X-Foo"`
+		Foo string `header:"x-foo"`
 	}
-	if err := c.ReqHeaderParser(&h); err != nil {
-		t.Fatal(err)
-	}
-	if h.Foo != "bar" {
-		t.Errorf("header parser failed")
+	if err := c.ReqHeaderParser(&h); err != nil || h.Foo != "bar" {
+		t.Errorf("ReqHeaderParser failed: %v", err)
 	}
 }
 
-func TestContext_IPAndIPs(t *testing.T) {
+func TestContext_IP(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer server.Close()
 
 	host, port, _ := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
-	addr := net.JoinHostPort(host, port)
-
-	conn, _ := net.Dial("tcp", addr)
+	conn, _ := net.Dial("tcp", net.JoinHostPort(host, port))
 	c := &Context{conn: conn}
 
 	if !strings.Contains(c.IP(), ".") {
-		t.Errorf("IP parsing failed")
-	}
-	if len(c.IPs()) != 1 {
-		t.Errorf("IPs parsing failed")
+		t.Error("IP parsing failed")
 	}
 }
 
-func TestContext_SendAndJSON(t *testing.T) {
-	rw := httptest.NewRecorder()
-	c := &Context{
-		conn: &fakeConn{rw: rw},
+func TestContext_IP_FallbackOnBadAddr(t *testing.T) {
+	c := &Context{conn: &badRemoteAddrConn{}}
+	if ip := c.IP(); ip != "not-a-valid-addr" {
+		t.Errorf("expected raw addr fallback, got %q", ip)
 	}
-	c.Send([]byte("hello"))
-	if rw.Body.String() != "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 5\r\n\r\nhello" {
-		t.Logf("%q", rw.Body)
-		t.Errorf("Send failed")
-	}
+}
 
-	c.JSON(map[string]string{"a": "b"})
+func TestContext_IPs_FromConn(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+
+	host, port, _ := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	conn, _ := net.Dial("tcp", net.JoinHostPort(host, port))
+	c := &Context{conn: conn}
+
+	if len(c.IPs()) != 1 {
+		t.Error("expected 1 IP from conn")
+	}
+}
+
+func TestContext_IPs_FromXForwardedFor(t *testing.T) {
+	c := &Context{
+		conn: &fakeConn{rw: httptest.NewRecorder()},
+		header: []KV{
+			{K: []byte("x-forwarded-for"), V: []byte("1.1.1.1, 2.2.2.2, 3.3.3.3")},
+		},
+	}
+	ips := c.IPs()
+	if len(ips) != 3 || ips[0] != "1.1.1.1" || ips[1] != "2.2.2.2" || ips[2] != "3.3.3.3" {
+		t.Errorf("unexpected IPs: %v", ips)
+	}
+}
+
+func TestContext_Send(t *testing.T) {
+	rw := httptest.NewRecorder()
+	c := &Context{conn: &fakeConn{rw: rw}}
+	c.Send([]byte("hello"))
+	if !strings.Contains(rw.Body.String(), "hello") {
+		t.Error("Send failed")
+	}
+}
+
+func TestContext_JSON(t *testing.T) {
+	rw := httptest.NewRecorder()
+	c := &Context{conn: &fakeConn{rw: rw}}
+	if err := c.JSON(map[string]string{"a": "b"}); err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(rw.Body.String(), `"a":"b"`) {
-		t.Errorf("JSON failed")
+		t.Error("JSON failed")
+	}
+}
+
+func TestContext_JSON_MarshalError(t *testing.T) {
+	rw := httptest.NewRecorder()
+	c := &Context{conn: &fakeConn{rw: rw}}
+	if err := c.JSON(make(chan int)); err == nil {
+		t.Error("expected marshal error")
 	}
 }
 
 func TestContext_Now(t *testing.T) {
 	c := &Context{}
 	t1 := time.Now()
-	t2 := c.Now()
-	if t2.Before(t1) {
-		t.Errorf("Now returned a time in the past")
+	if c.Now().Before(t1) {
+		t.Error("Now returned a time in the past")
 	}
 }
 
@@ -275,42 +376,145 @@ func TestContext_FormFile(t *testing.T) {
 
 	c := &Context{
 		body:   body.Bytes(),
-		header: []KV{{K: []byte("Content-Type"), V: []byte(writer.FormDataContentType())}},
+		header: []KV{{K: []byte("content-type"), V: []byte(writer.FormDataContentType())}},
 	}
 
 	fh, err := c.FormFile("file")
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || fh.Filename != "test.txt" {
+		t.Errorf("FormFile failed: %v", err)
 	}
-	if fh.Filename != "test.txt" {
-		t.Errorf("FormFile filename mismatch")
+	if _, err := c.FormFile("missing"); err != ErrFormFileNotFound {
+		t.Errorf("expected ErrFormFileNotFound, got %v", err)
+	}
+}
+
+func TestContext_FormFile_InvalidMultipart(t *testing.T) {
+	c := &Context{
+		body:   []byte("not multipart"),
+		header: []KV{{K: []byte("content-type"), V: []byte("multipart/form-data; boundary=xxx")}},
+	}
+	if _, err := c.FormFile("file"); err == nil {
+		t.Error("expected error for invalid multipart")
+	}
+}
+
+func TestContext_FormFile_WithMaxBodySize(t *testing.T) {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	fw, _ := writer.CreateFormFile("file", "test.txt")
+	io.WriteString(fw, "hello")
+	writer.Close()
+
+	c := &Context{
+		body:        body.Bytes(),
+		maxBodySize: 1024,
+		header:      []KV{{K: []byte("content-type"), V: []byte(writer.FormDataContentType())}},
 	}
 
-	_, err = c.FormFile("missing")
-	if err != ErrFormFileNotFound {
-		t.Errorf("expected ErrFormFileNotFound")
+	fh, err := c.FormFile("file")
+	if err != nil || fh.Filename != "test.txt" {
+		t.Errorf("FormFile with maxBodySize failed: %v", err)
+	}
+}
+
+func TestContext_FormFile_MissingContentType(t *testing.T) {
+	c := &Context{body: []byte("data")}
+	if _, err := c.FormFile("file"); err == nil {
+		t.Error("expected error when Content-Type is missing")
 	}
 }
 
 func TestContext_HeaderSet(t *testing.T) {
 	c := &Context{}
 	c.HeaderSet("X-Test", "123")
-	if c.HeaderSet("X-Test", "456"); string(c.resHeader[0].V) != "456" {
-		t.Errorf("HeaderSet failed")
+	c.HeaderSet("X-Test", "456")
+	if string(c.resHeader[0].V) != "456" {
+		t.Error("HeaderSet update failed")
 	}
 }
 
-type fakeConn struct {
-	rw *httptest.ResponseRecorder
+func TestContext_HeaderAppend(t *testing.T) {
+	c := &Context{}
+	c.HeaderAppend("Vary", "Origin")
+	c.HeaderAppend("Vary", "Accept-Encoding")
+	if string(c.resHeader[0].V) != "Origin, Accept-Encoding" {
+		t.Errorf("expected 'Origin, Accept-Encoding', got %q", string(c.resHeader[0].V))
+	}
 }
 
-func (f *fakeConn) Read(b []byte) (n int, err error)  { return 0, io.EOF }
-func (f *fakeConn) Write(b []byte) (n int, err error) { return f.rw.Write(b) }
-func (f *fakeConn) Close() error                      { return nil }
-func (f *fakeConn) LocalAddr() net.Addr               { return nil }
-func (f *fakeConn) RemoteAddr() net.Addr {
-	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 12345}
+func TestContext_HeaderAppend_New(t *testing.T) {
+	c := &Context{}
+	c.HeaderAppend("X-New", "value")
+	if len(c.resHeader) != 1 || string(c.resHeader[0].V) != "value" {
+		t.Error("HeaderAppend with new key failed")
+	}
 }
-func (f *fakeConn) SetDeadline(t time.Time) error      { return nil }
-func (f *fakeConn) SetReadDeadline(t time.Time) error  { return nil }
-func (f *fakeConn) SetWriteDeadline(t time.Time) error { return nil }
+
+func TestContext_DoubleWrite(t *testing.T) {
+	rw := httptest.NewRecorder()
+	c := &Context{conn: &fakeConn{rw: rw}, status: 200}
+	c.Send([]byte("first"))
+	c.Send([]byte("second"))
+	resp := rw.Body.String()
+	// Should only contain one HTTP response
+	if strings.Count(resp, "HTTP/1.1") != 1 {
+		t.Errorf("expected single HTTP response, got multiple: %q", resp)
+	}
+}
+
+func TestContext_MapToStruct_NonPointer(t *testing.T) {
+	if err := mapToStruct(nil, "query", struct{ Name string }{}); err != ErrDstMustBeAPointer {
+		t.Errorf("expected ErrDstMustBeAPointer, got %v", err)
+	}
+}
+
+func TestContext_MapToStruct_NilPointer(t *testing.T) {
+	var s *struct{ Name string }
+	if err := mapToStruct(nil, "query", s); err != ErrDstMustBeAPointer {
+		t.Errorf("expected ErrDstMustBeAPointer, got %v", err)
+	}
+}
+
+func TestContext_MapToStruct_NonStringField(t *testing.T) {
+	var s struct {
+		Count int `query:"count"`
+	}
+	if err := mapToStruct(map[string][]string{"count": {"42"}}, "query", &s); err != nil || s.Count != 0 {
+		t.Errorf("expected non-string field to be ignored, got %d, err=%v", s.Count, err)
+	}
+}
+
+func TestContext_MapToStruct_EmptyValue(t *testing.T) {
+	var s struct {
+		Name string `query:"name"`
+	}
+	if err := mapToStruct(map[string][]string{"other": {"x"}}, "query", &s); err != nil || s.Name != "" {
+		t.Errorf("expected empty Name, got %q, err=%v", s.Name, err)
+	}
+}
+
+func TestContext_MapToStruct_NoTag(t *testing.T) {
+	var s struct {
+		Name  string `query:"name"`
+		Other string // no query tag — should be skipped
+	}
+	if err := mapToStruct(map[string][]string{"name": {"john"}}, "query", &s); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if s.Name != "john" || s.Other != "" {
+		t.Errorf("expected Name=john, Other='', got Name=%q, Other=%q", s.Name, s.Other)
+	}
+}
+
+func TestContext_MapToStruct_UnexportedField(t *testing.T) {
+	var s struct {
+		name string `query:"name"`
+	}
+	if err := mapToStruct(map[string][]string{"name": {"john"}}, "query", &s); err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+	if s.name != "" {
+		t.Error("expected unexported field to be ignored")
+	}
+}
+

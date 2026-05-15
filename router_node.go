@@ -24,9 +24,19 @@ func (n *node) addMethod(method string, path [][]byte, h []Handler) {
 	isParam := len(part) > 0 && part[0] == ':'
 
 	for _, c := range n.children {
-		if bytes.Equal(c.part, part) || c.param {
+		if bytes.Equal(c.part, part) {
 			c.addMethod(method, path[1:], h)
 			return
+		}
+	}
+
+	// Reuse existing param node if adding another param at same level
+	if isParam {
+		for _, c := range n.children {
+			if c.param {
+				c.addMethod(method, path[1:], h)
+				return
+			}
 		}
 	}
 
@@ -48,12 +58,28 @@ func (n *node) findMethod(method string, path [][]byte, params *[]KV) ([]Handler
 		return h, ok
 	}
 
+	// First try the exact static child. If the recursive descent dead-ends,
+	// fall through and also try a param sibling — without backtracking, a
+	// static segment that matches at one depth but fails deeper would shadow
+	// an otherwise-matching param route registered at the same level.
 	for _, c := range n.children {
-		if bytes.Equal(c.part, path[0]) || c.param {
-			if c.param {
-				*params = append(*params, KV{c.key, path[0]})
+		if !c.param && bytes.Equal(c.part, path[0]) {
+			if h, ok := c.findMethod(method, path[1:], params); ok {
+				return h, true
 			}
-			return c.findMethod(method, path[1:], params)
+			break
+		}
+	}
+
+	// Try the param child, trimming any params appended on an abandoned branch.
+	for _, c := range n.children {
+		if c.param {
+			mark := len(*params)
+			*params = append(*params, KV{c.key, path[0]})
+			if h, ok := c.findMethod(method, path[1:], params); ok {
+				return h, true
+			}
+			*params = (*params)[:mark]
 		}
 	}
 
