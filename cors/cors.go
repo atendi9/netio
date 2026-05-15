@@ -8,90 +8,91 @@ import (
 	"github.com/atendi9/netio"
 )
 
-// Config defines the configuration for CORS middleware
+const wildcard = "*"
+
 type Config struct {
-	AllowOrigins     []string // List of allowed origins, or ["*"] for all
-	AllowMethods     []string // Allowed HTTP methods (GET, POST, PUT, DELETE, etc.)
-	AllowHeaders     []string // Allowed request headers
-	ExposeHeaders    []string // Headers exposed to the browser
-	AllowCredentials bool     // Whether credentials (cookies/auth) are allowed
-	MaxAge           int      // Cache duration in seconds
+	AllowedOrigins   []string
+	AllowedMethods   []string
+	AllowedHeaders   []string
+	ExposedHeaders   []string
+	AllowCredentials bool
+	MaxAgeSeconds  int
 }
 
-const AllowAll string = "*" // Special value to allow all origins in CORS
-
-// Middleware returns a configurable CORS middleware
-func Middleware(config Config) netio.Handler {
-	allowAllOrigins := slices.Contains(config.AllowOrigins, AllowAll)
-	allowMethods := strings.Join(config.AllowMethods, ", ")
-	if allowMethods == "" {
-		allowMethods = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+func resolveAllowedMethods(methods []string) string {
+	if joined := strings.Join(methods, ", "); joined != "" {
+		return joined
 	}
+	return "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+}
 
-	exposeHeaders := strings.Join(config.ExposeHeaders, ", ")
+func Middleware(config Config) netio.Handler {
+	headersConfigured := len(config.AllowedHeaders) > 0
+	allowAllHeaders := slices.Contains(config.AllowedHeaders, wildcard)
+	allowedMethods := resolveAllowedMethods(config.AllowedMethods)
+	allowedHeaders := strings.Join(config.AllowedHeaders, ", ")
+	exposedHeaders := strings.Join(config.ExposedHeaders, ", ")
 
 	return func(c *netio.Context) {
 		origin := c.Header("Origin")
 
-		c.HeaderSet("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
-
-		allowed := false
-		if allowAllOrigins {
-			allowed = true
-		} else {
-			for _, o := range config.AllowOrigins {
-				if o == origin {
-					allowed = true
-					break
-				}
-			}
-		}
-
-		if !allowed || origin == "" {
+		if origin == "" || !isOriginAllowed(origin, config.AllowedOrigins) {
 			c.Next()
 			return
 		}
 
-		if config.AllowCredentials {
-			c.HeaderSet("Access-Control-Allow-Origin", origin)
-			c.HeaderSet("Access-Control-Allow-Credentials", "true")
-		} else {
-			if allowAllOrigins {
-				c.HeaderSet("Access-Control-Allow-Origin", "*")
-			} else {
-				c.HeaderSet("Access-Control-Allow-Origin", origin)
-			}
+		c.HeaderAppend("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
+		setOriginHeaders(c, origin, config.AllowedOrigins, config.AllowCredentials)
+
+		if exposedHeaders != "" {
+			c.HeaderSet("Access-Control-Expose-Headers", exposedHeaders)
 		}
 
-		if exposeHeaders != "" {
-			c.HeaderSet("Access-Control-Expose-Headers", exposeHeaders)
-		}
 		if c.Method() == "OPTIONS" {
-			c.HeaderSet("Access-Control-Allow-Methods", allowMethods)
-
-			reqHeaders := c.Header("Access-Control-Request-Headers")
-
-			if len(config.AllowHeaders) > 0 {
-				if slices.Contains(config.AllowHeaders, AllowAll) {
-					if reqHeaders != "" {
-						c.HeaderSet("Access-Control-Allow-Headers", reqHeaders)
-					}
-				} else {
-					c.HeaderSet("Access-Control-Allow-Headers", strings.Join(config.AllowHeaders, ", "))
-				}
-			} else if reqHeaders != "" {
-				c.HeaderSet("Access-Control-Allow-Headers", reqHeaders)
-			}
-
-			if config.MaxAge > 0 {
-				c.HeaderSet("Access-Control-Max-Age", strconv.Itoa(config.MaxAge))
-			}
-
-			c.SendStatus(204)
-			c.Abort()
+			handlePreflight(c, allowedMethods, allowedHeaders, allowAllHeaders, headersConfigured, config.MaxAgeSeconds)
 			return
 		}
 
 		c.Next()
 	}
+}
+
+func isOriginAllowed(origin string, allowedOrigins []string) bool {
+	return slices.Contains(allowedOrigins, wildcard) || slices.Contains(allowedOrigins, origin)
+}
+
+func setOriginHeaders(c *netio.Context, origin string, allowedOrigins []string, allowCredentials bool) {
+	allowAllOrigins := slices.Contains(allowedOrigins, wildcard)
+
+	if allowAllOrigins && !allowCredentials {
+		c.HeaderSet("Access-Control-Allow-Origin", wildcard)
+	} else {
+		c.HeaderSet("Access-Control-Allow-Origin", origin)
+	}
+
+	if allowCredentials {
+		c.HeaderSet("Access-Control-Allow-Credentials", "true")
+	}
+}
+
+func handlePreflight(c *netio.Context, allowedMethods, allowedHeaders string, allowAllHeaders, headersConfigured bool, MaxAgeSeconds int) {
+	c.HeaderSet("Access-Control-Allow-Methods", allowedMethods)
+
+	if headers := resolveAllowedHeadersValue(c.Header("Access-Control-Request-Headers"), allowedHeaders, allowAllHeaders, headersConfigured); headers != "" {
+		c.HeaderSet("Access-Control-Allow-Headers", headers)
+	}
+
+	if MaxAgeSeconds > 0 {
+		c.HeaderSet("Access-Control-Max-Age", strconv.Itoa(MaxAgeSeconds))
+	}
+
+	c.SendStatus(204)
+	c.Abort()
+}
+
+func resolveAllowedHeadersValue(reqHeaders, allowedHeaders string, allowAllHeaders, headersConfigured bool) string {
+	if !headersConfigured || allowAllHeaders {
+		return reqHeaders
+	}
+	return allowedHeaders
 }
