@@ -55,8 +55,10 @@ func (g *group) join(path string) string {
 }
 
 func (g *group) chain(h []Handler) []Handler {
-	g.middlewares = append(g.app.mw, g.middlewares...)
-	return append(g.middlewares, h...)
+	all := make([]Handler, 0, len(g.middlewares)+len(h))
+	all = append(all, g.middlewares...)
+	all = append(all, h...)
+	return all
 }
 
 func (g *group) Get(path string, h ...Handler) {
@@ -80,9 +82,12 @@ func (g *group) Patch(path string, h ...Handler) {
 }
 
 func (g *group) Group(path string, m ...Handler) Router {
+	mws := make([]Handler, len(g.middlewares), len(g.middlewares)+len(m))
+	copy(mws, g.middlewares)
+	mws = append(mws, m...)
 	return &group{
 		app:         g.app,
 		basePath:    g.join(path),
-		middlewares: append(g.middlewares, m...),
+		middlewares: mws,
 	}
 }
