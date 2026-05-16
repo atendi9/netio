@@ -1,7 +1,6 @@
 package netio
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -22,15 +21,8 @@ func NewDefaultLogger(appName string) Logger {
 	}
 }
 
+// log writes through the app logger. New always assigns a logger, so a nil
+// check is unnecessary here.
 func (a *App) log(msgs ...string) {
-	if a.logger != nil {
-		a.logger(msgs...)
-		return
-	}
-	message := strings.Join(msgs, "")
-	fmt.Print(a.newMsg(message))
-}
-
-func (a *App) newMsg(msg string) string {
-	return fmt.Sprintf("\r%s ▷ %s\n", a.appName, msg)
+	a.logger(msgs...)
 }
