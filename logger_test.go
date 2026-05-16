@@ -1,17 +1,8 @@
 package netio
 
 import (
-	"strings"
 	"testing"
 )
-
-func TestApp_NewMsg(t *testing.T) {
-	app, _ := New(AppConfig{Port: "0"})
-	msg := app.newMsg("hello")
-	if !strings.Contains(msg, "hello") || !strings.Contains(msg, app.appName) {
-		t.Errorf("unexpected format: %q", msg)
-	}
-}
 
 func TestApp_Log_WithLogger(t *testing.T) {
 	called := false
@@ -22,8 +13,11 @@ func TestApp_Log_WithLogger(t *testing.T) {
 	}
 }
 
-func TestApp_Log_WithoutLogger(t *testing.T) {
+func TestApp_Log_DefaultLogger(t *testing.T) {
 	app, _ := New(AppConfig{Port: "0"})
-	app.logger = nil
-	app.log("no logger")
+	if app.logger == nil {
+		t.Fatal("New must assign a default logger")
+	}
+	// Must not panic.
+	app.log("default logger message")
 }

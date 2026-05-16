@@ -302,39 +302,39 @@ func (a *App) closeAllConns() {
 //
 // will serve files from the "./public" directory at the "/static/" endpoint.
 func (a *App) ServeFiles(endpoint, dirPath string) error {
-    if len(endpoint) == 0 {
-        endpoint = "/"
-    }
-    if endpoint[len(endpoint)-1] != '/' {
-        endpoint += "/"
-    }
+	if len(endpoint) == 0 {
+		endpoint = "/"
+	}
+	if endpoint[len(endpoint)-1] != '/' {
+		endpoint += "/"
+	}
 
-    absDirPath, err := filepath.Abs(dirPath)
-    if err != nil {
-        return err
-    }
+	absDirPath, err := filepath.Abs(dirPath)
+	if err != nil {
+		return err
+	}
 
-    absDirPath = filepath.Clean(absDirPath) + string(filepath.Separator)
+	absDirPath = filepath.Clean(absDirPath) + string(filepath.Separator)
 
-    a.GET(endpoint+":filename", func(c *Context) {
-        filename := c.Param("filename")
+	a.GET(endpoint+":filename", func(c *Context) {
+		filename := c.Param("filename")
 
-        decodedFilename, err := url.PathUnescape(filename)
-        if err != nil {
-            c.SendStatus(http.StatusBadRequest)
-            return
-        }
+		decodedFilename, err := url.PathUnescape(filename)
+		if err != nil {
+			c.SendStatus(http.StatusBadRequest)
+			return
+		}
 
-        fullPath := filepath.Join(absDirPath, decodedFilename)
-		
-        if !strings.HasPrefix(fullPath, absDirPath) {
-            c.SendStatus(http.StatusForbidden)
-            return
-        }
+		fullPath := filepath.Join(absDirPath, decodedFilename)
 
-        c.SendFile(fullPath)
-    })
-    return nil
+		if !strings.HasPrefix(fullPath, absDirPath) {
+			c.SendStatus(http.StatusForbidden)
+			return
+		}
+
+		c.SendFile(fullPath)
+	})
+	return nil
 }
 
 // ServeHTTP makes the app implement Go's http.Handler interface.
@@ -346,6 +346,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := newContext()
 	ctx.appName = a.appName
+	ctx.logger = a.logger
 	ctx.w = w
 	ctx.r = r
 	ctx.isStdHTTP = true
@@ -388,9 +389,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx.index = -1
 	ctx.Next()
 
-	if !ctx.wrote {
-		ctx.SendStatus(http.StatusNoContent)
-	}
+	ctx.finalizeNoBody()
 }
 
 func (a *App) serve(conn net.Conn) {
@@ -410,6 +409,7 @@ func (a *App) serve(conn net.Conn) {
 		// cannot observe a later request's data.
 		ctx := newContext()
 		ctx.appName = a.appName
+		ctx.logger = a.logger
 		ctx.conn = conn
 		ctx.maxBodySize = a.maxBodySize
 
@@ -446,9 +446,7 @@ func (a *App) serve(conn net.Conn) {
 		ctx.index = -1
 		ctx.Next()
 
-		if !ctx.wrote {
-			ctx.SendStatus(http.StatusNoContent)
-		}
+		ctx.finalizeNoBody()
 
 		if !keepAlive(ctx) {
 			return

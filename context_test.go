@@ -2,6 +2,7 @@ package netio
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net"
@@ -475,12 +476,43 @@ func TestContext_MapToStruct_NilPointer(t *testing.T) {
 	}
 }
 
-func TestContext_MapToStruct_NonStringField(t *testing.T) {
+func TestContext_MapToStruct_ScalarFields(t *testing.T) {
+	var s struct {
+		Count   int     `query:"count"`
+		Enabled bool    `query:"enabled"`
+		Ratio   float64 `query:"ratio"`
+		Size    uint32  `query:"size"`
+	}
+	err := mapToStruct(map[string][]string{
+		"count":   {"42"},
+		"enabled": {"true"},
+		"ratio":   {"1.5"},
+		"size":    {"7"},
+	}, "query", &s)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.Count != 42 || !s.Enabled || s.Ratio != 1.5 || s.Size != 7 {
+		t.Errorf("unexpected struct: %+v", s)
+	}
+}
+
+func TestContext_MapToStruct_InvalidScalar(t *testing.T) {
 	var s struct {
 		Count int `query:"count"`
 	}
-	if err := mapToStruct(map[string][]string{"count": {"42"}}, "query", &s); err != nil || s.Count != 0 {
-		t.Errorf("expected non-string field to be ignored, got %d, err=%v", s.Count, err)
+	if err := mapToStruct(map[string][]string{"count": {"notanumber"}}, "query", &s); err == nil {
+		t.Error("expected error parsing invalid int, got nil")
+	}
+}
+
+func TestContext_MapToStruct_UnsupportedField(t *testing.T) {
+	var s struct {
+		Tags []string `query:"tags"`
+	}
+	err := mapToStruct(map[string][]string{"tags": {"a"}}, "query", &s)
+	if !errors.Is(err, ErrUnsupportedFieldType) {
+		t.Errorf("expected ErrUnsupportedFieldType, got %v", err)
 	}
 }
 
@@ -517,4 +549,3 @@ func TestContext_MapToStruct_UnexportedField(t *testing.T) {
 		t.Error("expected unexported field to be ignored")
 	}
 }
-

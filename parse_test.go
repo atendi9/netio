@@ -315,3 +315,52 @@ func TestKeepAlive(t *testing.T) {
 		})
 	}
 }
+
+func TestParseChunked_NegativeSizeRejected(t *testing.T) {
+	// A negative chunk size must be rejected, not parsed into a make() length.
+	req := "POST /c HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n-1\r\nx\r\n0\r\n\r\n"
+	r := bufio.NewReader(bytes.NewBufferString(req))
+	c := &Context{}
+	if result := parseRequest(r, c); result != parseBadReq {
+		t.Fatalf("expected parseBadReq for negative chunk size, got %d", result)
+	}
+}
+
+func TestParseChunked_ChunkExtensionIgnored(t *testing.T) {
+	// A chunk-size line may carry a ";ext" extension that must be stripped.
+	req := "POST /c HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n" +
+		"5;name=value\r\nhello\r\n0\r\n\r\n"
+	r := bufio.NewReader(bytes.NewBufferString(req))
+	c := &Context{}
+	if result := parseRequest(r, c); result != parseOK {
+		t.Fatalf("expected parseOK with chunk extension, got %d", result)
+	}
+	if !bytes.Equal(c.body, []byte("hello")) {
+		t.Errorf("expected 'hello', got %q", c.body)
+	}
+}
+
+func TestParseChunked_TrailerConsumed(t *testing.T) {
+	// Trailer headers after the last-chunk marker must be consumed cleanly.
+	req := "POST /c HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n" +
+		"5\r\nhello\r\n0\r\nX-Trailer: v\r\n\r\n"
+	r := bufio.NewReader(bytes.NewBufferString(req))
+	c := &Context{}
+	if result := parseRequest(r, c); result != parseOK {
+		t.Fatalf("expected parseOK with trailer, got %d", result)
+	}
+	if !bytes.Equal(c.body, []byte("hello")) {
+		t.Errorf("expected 'hello', got %q", c.body)
+	}
+}
+
+func TestParseChunked_BadChunkTerminator(t *testing.T) {
+	// A chunk whose data is not followed by CRLF is corrupt framing.
+	req := "POST /c HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n" +
+		"5\r\nhelloXX0\r\n\r\n"
+	r := bufio.NewReader(bytes.NewBufferString(req))
+	c := &Context{}
+	if result := parseRequest(r, c); result != parseBadReq {
+		t.Fatalf("expected parseBadReq for bad chunk terminator, got %d", result)
+	}
+}
