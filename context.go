@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -33,7 +34,17 @@ type Context struct {
 
 	wrote bool
 
+	// statusSet records whether a handler explicitly called Status(): a
+	// "handler forgot to write a body" fallback must honor that status
+	// rather than overriding it with 204 No Content.
+	statusSet bool
+
 	appName string
+
+	// logger is the app-configured logger, threaded onto the Context so
+	// response writes reuse it instead of allocating a fresh logger per call
+	// (and so a custom Logger passed to New is not silently bypassed).
+	logger Logger
 
 	handlers []Handler
 	index    int
@@ -96,6 +107,7 @@ func (c *Context) reset() {
 	c.index = -1
 	c.aborted = false
 	c.status = 200
+	c.statusSet = false
 	c.wrote = false
 	c.isStdHTTP = false
 }
@@ -177,7 +189,10 @@ func (c *Context) QueryParser(v any) error {
 	return mapToStruct(values, "query", v)
 }
 
-var ErrDstMustBeAPointer = errors.New("dst must be pointer")
+var (
+	ErrDstMustBeAPointer    = errors.New("dst must be pointer")
+	ErrUnsupportedFieldType = errors.New("unsupported field type")
+)
 
 func mapToStruct(values url.Values, tag string, dst any) error {
 	v := reflect.ValueOf(dst)
@@ -205,12 +220,48 @@ func mapToStruct(values url.Values, tag string, dst any) error {
 			continue
 		}
 
-		switch f.Kind() {
-		case reflect.String:
-			f.SetString(val)
+		if err := setFieldValue(f, val); err != nil {
+			return fmt.Errorf("netio: field %q: %w", field.Name, err)
 		}
 	}
 
+	return nil
+}
+
+// setFieldValue parses val into f according to f's kind. Unsupported kinds
+// return an error rather than being silently skipped, so a caller binding an
+// unparseable field is told instead of receiving a zero value.
+func setFieldValue(f reflect.Value, val string) error {
+	switch f.Kind() {
+	case reflect.String:
+		f.SetString(val)
+	case reflect.Bool:
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return err
+		}
+		f.SetBool(b)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n, err := strconv.ParseInt(val, 10, f.Type().Bits())
+		if err != nil {
+			return err
+		}
+		f.SetInt(n)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		n, err := strconv.ParseUint(val, 10, f.Type().Bits())
+		if err != nil {
+			return err
+		}
+		f.SetUint(n)
+	case reflect.Float32, reflect.Float64:
+		n, err := strconv.ParseFloat(val, f.Type().Bits())
+		if err != nil {
+			return err
+		}
+		f.SetFloat(n)
+	default:
+		return ErrUnsupportedFieldType
+	}
 	return nil
 }
 
@@ -228,6 +279,7 @@ func (c *Context) Params(name string, defaultValue ...string) string {
 
 func (c *Context) Status(statusCode int) *Context {
 	c.status = statusCode
+	c.statusSet = true
 	return c
 }
 
@@ -258,7 +310,7 @@ func (c *Context) SendFileFromReader(r io.ReadCloser) {
 	}
 
 	c.HeaderSet("Transfer-Encoding", "chunked")
-	c.writeResponseWithHeaders(NewDefaultLogger(c.appName), c.status, nil)
+	c.writeResponseWithHeaders(c.responseLogger(), c.status, nil)
 
 	buf := make([]byte, 32*1024)
 	for {
@@ -330,8 +382,32 @@ func (c *Context) SendStatus(status int) error {
 	return c.Send(nil)
 }
 
+// finalizeNoBody sends a fallback response when the handler chain produced no
+// output. If a handler explicitly set a status it is honored (e.g. a 500 set
+// without a body must not be downgraded to 204); otherwise 204 No Content is
+// sent for the genuine "no content" case.
+func (c *Context) finalizeNoBody() {
+	if c.wrote {
+		return
+	}
+	if c.statusSet {
+		c.SendStatus(c.status)
+		return
+	}
+	c.SendStatus(http.StatusNoContent)
+}
+
+// responseLogger returns the logger used for response logging, reusing the
+// app-configured logger when available and falling back to a default one.
+func (c *Context) responseLogger() Logger {
+	if c.logger != nil {
+		return c.logger
+	}
+	return NewDefaultLogger(c.appName)
+}
+
 func (c *Context) Send(data []byte) error {
-	return c.writeResponseWithHeaders(NewDefaultLogger(c.appName), c.status, data)
+	return c.writeResponseWithHeaders(c.responseLogger(), c.status, data)
 }
 
 func (c *Context) JSON(data any) error {
@@ -381,6 +457,9 @@ func (c *Context) HeaderSet(key, value string) {
 	lkey := strings.ToLower(key)
 	for i := 0; i < len(c.resHeader); i++ {
 		if strings.ToLower(string(c.resHeader[i].K)) == lkey {
+			// Adopt the casing of the most recent set so the emitted header
+			// does not keep a stale lowercase form from an earlier call site.
+			c.resHeader[i].K = []byte(key)
 			c.resHeader[i].V = []byte(value)
 			return
 		}
