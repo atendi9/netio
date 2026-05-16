@@ -97,17 +97,44 @@ func (ctx *Context) writeResponseWithHeaders(
 		buf.WriteString("\r\n")
 	}
 
-	buf.WriteString("\r\n")
+	headerBlock := buf.String()
 
+	buf.WriteString("\r\n")
 	buf.Write(body)
 	responseBytes := buf.Bytes()
 
-	// Log only the headers (truncate at the blank line before body)
-	if idx := bytes.Index(responseBytes, []byte("\r\n\r\n")); idx != -1 {
-		logger(string(responseBytes[:idx+4]))
-	}
+	// Log the status/header block with sensitive header values redacted, so
+	// tokens and cookies are never written to logs.
+	logger(redactSensitiveHeaders(headerBlock))
 
 	_, err := ctx.conn.Write(responseBytes)
 	ctx.wrote = true
 	return err
+}
+
+// sensitiveResponseHeaders are header names whose values must not be logged.
+var sensitiveResponseHeaders = map[string]struct{}{
+	"set-cookie":          {},
+	"authorization":       {},
+	"proxy-authorization": {},
+	"www-authenticate":    {},
+	"proxy-authenticate":  {},
+	"cookie":              {},
+}
+
+// redactSensitiveHeaders replaces the values of sensitive headers in a raw
+// header block with "[REDACTED]", leaving the rest of the block intact.
+func redactSensitiveHeaders(block string) string {
+	lines := strings.Split(block, "\r\n")
+	for i, line := range lines {
+		colon := strings.IndexByte(line, ':')
+		if colon == -1 {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(line[:colon]))
+		if _, ok := sensitiveResponseHeaders[name]; ok {
+			lines[i] = line[:colon+1] + " [REDACTED]"
+		}
+	}
+	return strings.Join(lines, "\r\n")
 }
