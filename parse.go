@@ -235,21 +235,37 @@ func parseChunked(r *bufio.Reader, c *Context) parseResult {
 	var body []byte
 
 	for {
-		line, err := r.ReadBytes('\n')
+		line, err := readLimitedLine(r, maxHeaderLineSize)
 		if err != nil {
 			return parseBadReq
 		}
-		size, err := strconv.ParseInt(string(bytes.TrimSpace(line)), 16, 64)
-		if err != nil {
+
+		// Strip any chunk extension (";name=value") before parsing the size.
+		sizeField := bytes.TrimSpace(line)
+		if i := bytes.IndexByte(sizeField, ';'); i != -1 {
+			sizeField = bytes.TrimSpace(sizeField[:i])
+		}
+
+		size, err := strconv.ParseInt(string(sizeField), 16, 64)
+		if err != nil || size < 0 {
 			return parseBadReq
 		}
 
 		if size == 0 {
-			r.ReadBytes('\n')
+			// Consume the trailer section up to the terminating blank line.
+			if !consumeChunkedTrailer(r) {
+				return parseBadReq
+			}
 			break
 		}
 
-		if c.maxBodySize > 0 && len(body)+int(size) > c.maxBodySize {
+		// Bound the chunk size before allocating. The cumulative comparison is
+		// done in int64 so that a 64-bit size never overflows int on a 32-bit
+		// platform (where int(size) could wrap negative and bypass the limit).
+		if c.maxBodySize > 0 && int64(len(body))+size > int64(c.maxBodySize) {
+			return parseTooLarge
+		}
+		if size > int64(maxInt) {
 			return parseTooLarge
 		}
 
@@ -258,9 +274,40 @@ func parseChunked(r *bufio.Reader, c *Context) parseResult {
 			return parseBadReq
 		}
 		body = append(body, chunk...)
-		r.ReadBytes('\n')
+
+		// Each chunk's data is terminated by a CRLF.
+		if !expectCRLF(r) {
+			return parseBadReq
+		}
 	}
 
 	c.body = body
 	return parseOK
+}
+
+// maxInt is the largest value representable by int on the build platform.
+const maxInt = int(^uint(0) >> 1)
+
+// expectCRLF reads the line terminating a chunk's data and verifies it is a
+// (possibly bare-LF) empty line. A non-empty line means corrupt chunk framing.
+func expectCRLF(r *bufio.Reader) bool {
+	line, err := r.ReadBytes('\n')
+	if err != nil {
+		return false
+	}
+	return len(bytes.TrimRight(line, "\r\n")) == 0
+}
+
+// consumeChunkedTrailer reads optional trailer header lines after the
+// last-chunk marker, stopping at the terminating blank line.
+func consumeChunkedTrailer(r *bufio.Reader) bool {
+	for {
+		line, err := readLimitedLine(r, maxHeaderLineSize)
+		if err != nil {
+			return false
+		}
+		if len(bytes.TrimRight(line, "\r\n")) == 0 {
+			return true
+		}
+	}
 }
