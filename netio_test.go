@@ -583,6 +583,44 @@ func TestServe_HandlerNoWrite(t *testing.T) {
 	}
 }
 
+func TestServe_HandlerStatusWithoutBody(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0"})
+	app.GET("/fail", func(c *Context) {
+		// Handler set a status but wrote no body: the explicit status must
+		// be honored rather than overridden with 204 No Content.
+		c.Status(http.StatusInternalServerError)
+	})
+
+	client, server := net.Pipe()
+	defer client.Close()
+
+	done := make(chan struct{})
+	go func() {
+		app.serve(server)
+		close(done)
+	}()
+
+	fmt.Fprint(client, "GET /fail HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+
+	buf := make([]byte, 4096)
+	client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, _ := client.Read(buf)
+	resp := string(buf[:n])
+
+	if !strings.Contains(resp, "500") {
+		t.Errorf("expected 500 in response, got: %q", resp)
+	}
+	if strings.Contains(resp, "204") {
+		t.Errorf("explicit 500 status was downgraded to 204: %q", resp)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("serve did not return in time")
+	}
+}
+
 func TestServe_KeepAlive(t *testing.T) {
 	app, _ := New(AppConfig{Port: "0"})
 	app.GET("/ping", func(c *Context) { c.Send([]byte("pong")) })
