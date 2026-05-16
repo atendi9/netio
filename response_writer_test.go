@@ -76,3 +76,44 @@ func TestWriteResponse_ContentLengthPreserved(t *testing.T) {
 		t.Errorf("unexpected Content-Length in response: %q", body)
 	}
 }
+func TestRedactSensitiveHeaders(t *testing.T) {
+	block := "HTTP/1.1 200 OK\r\n" +
+		"Set-Cookie: session=secret123\r\n" +
+		"Authorization: Bearer token\r\n" +
+		"Content-Type: text/plain\r\n"
+
+	got := redactSensitiveHeaders(block)
+
+	if strings.Contains(got, "secret123") || strings.Contains(got, "Bearer token") {
+		t.Errorf("sensitive header value not redacted: %q", got)
+	}
+	if !strings.Contains(got, "Set-Cookie: [REDACTED]") {
+		t.Errorf("expected redacted Set-Cookie, got: %q", got)
+	}
+	if !strings.Contains(got, "Authorization: [REDACTED]") {
+		t.Errorf("expected redacted Authorization, got: %q", got)
+	}
+	if !strings.Contains(got, "Content-Type: text/plain") {
+		t.Errorf("non-sensitive header must be preserved, got: %q", got)
+	}
+}
+
+func TestWriteResponse_RedactsSensitiveHeaderInLog(t *testing.T) {
+	var logged string
+	logger := func(msgs ...string) { logged = strings.Join(msgs, "") }
+
+	rw := httptest.NewRecorder()
+	c := &Context{
+		conn:      &fakeConn{rw: rw},
+		resHeader: []KV{{K: []byte("Set-Cookie"), V: []byte("session=topsecret")}},
+	}
+	c.writeResponseWithHeaders(logger, 200, []byte("ok"))
+
+	if strings.Contains(logged, "topsecret") {
+		t.Errorf("Set-Cookie value leaked to log: %q", logged)
+	}
+	// The wire response must still carry the real cookie value.
+	if !strings.Contains(rw.Body.String(), "session=topsecret") {
+		t.Errorf("redaction must not alter the wire response: %q", rw.Body.String())
+	}
+}
