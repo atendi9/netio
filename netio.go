@@ -378,8 +378,12 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		ctx.handlers = append(ctx.handlers, h...)
 	} else if r.Method == "OPTIONS" {
-		ctx.SendStatus(http.StatusNoContent)
-		return
+		// Appended to the chain rather than answered inline: returning here
+		// would skip a.mw, so a CORS middleware would never see the preflight
+		// of an unregistered route. Mirrors serve().
+		ctx.handlers = append(ctx.handlers, func(c *Context) {
+			c.SendStatus(http.StatusNoContent)
+		})
 	} else {
 		ctx.handlers = append(ctx.handlers, func(c *Context) {
 			c.SendStatus(http.StatusNotFound)
