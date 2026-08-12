@@ -38,24 +38,67 @@ func resolveAllowedMethods(methods []string) string {
 	return "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
 }
 
+// normalizeList flattens comma-joined entries and drops blanks. Config values
+// routinely come from a single environment variable holding a comma-separated
+// list, which would otherwise arrive as one unusable element.
+func normalizeList(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, entry := range values {
+		for v := range strings.SplitSeq(entry, ",") {
+			if v = strings.TrimSpace(v); v != "" {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+// normalizeOrigin canonicalizes an origin for comparison only. An origin is
+// scheme://host[:port] with no path, and scheme and host are case-insensitive,
+// so lowercasing and dropping a trailing slash cannot change which server it
+// designates — it only stops a cosmetic mismatch from silently disabling CORS.
+// The value echoed back to the browser is always the raw request Origin.
+func normalizeOrigin(origin string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(origin), "/"))
+}
+
+func normalizeOrigins(origins []string) []string {
+	out := normalizeList(origins)
+	for i, o := range out {
+		out[i] = normalizeOrigin(o)
+	}
+	return out
+}
+
 // Middleware returns a configurable CORS middleware
 func Middleware(config Config) netio.Handler {
-	headersConfigured := len(config.AllowHeaders) > 0
-	allowAllHeaders := slices.Contains(config.AllowHeaders, AllowAll)
-	allowedMethods := resolveAllowedMethods(config.AllowMethods)
-	allowedHeaders := strings.Join(config.AllowHeaders, ", ")
-	exposedHeaders := strings.Join(config.ExposeHeaders, ", ")
+	normalizedHeaders := normalizeList(config.AllowHeaders)
+	allowedOrigins := normalizeOrigins(config.AllowOrigins)
+	headersConfigured := len(normalizedHeaders) > 0
+	allowAllHeaders := slices.Contains(normalizedHeaders, AllowAll)
+	allowedMethods := resolveAllowedMethods(normalizeList(config.AllowMethods))
+	allowedHeaders := strings.Join(normalizedHeaders, ", ")
+	exposedHeaders := strings.Join(normalizeList(config.ExposeHeaders), ", ")
 
 	return func(c *netio.Context) {
 		origin := c.Header("Origin")
 
-		if origin == "" || !isOriginAllowed(origin, config) {
+		if origin == "" {
+			c.Next()
+			return
+		}
+
+		if !isOriginAllowed(origin, allowedOrigins, config.AllowOriginFunc) {
+			// A rejected origin yields a response with no CORS headers, which
+			// the browser reports only as a generic failure. Log it so the
+			// cause is visible server-side instead of silent.
+			c.Logger()("cors: origin ", origin, " is not allowed; configured origins: [", strings.Join(allowedOrigins, ", "), "]")
 			c.Next()
 			return
 		}
 
 		c.HeaderAppend("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers")
-		setOriginHeaders(c, origin, config.AllowOrigins, config.AllowCredentials)
+		setOriginHeaders(c, origin, allowedOrigins, config.AllowCredentials)
 
 		if exposedHeaders != "" {
 			c.HeaderSet("Access-Control-Expose-Headers", exposedHeaders)
@@ -70,12 +113,16 @@ func Middleware(config Config) netio.Handler {
 	}
 }
 
-func isOriginAllowed(origin string, config Config) bool {
-	if slices.Contains(config.AllowOrigins, wildcard) || slices.Contains(config.AllowOrigins, origin) {
+// isOriginAllowed matches against the pre-normalized origin list. allowedOrigins
+// is already canonical, so only the request origin needs normalizing here.
+// AllowOriginFunc receives the raw origin: custom validation may be case- or
+// suffix-sensitive in ways this package should not second-guess.
+func isOriginAllowed(origin string, allowedOrigins []string, allowOriginFunc func(string) bool) bool {
+	if slices.Contains(allowedOrigins, wildcard) || slices.Contains(allowedOrigins, normalizeOrigin(origin)) {
 		return true
 	}
-	if config.AllowOriginFunc != nil {
-		return config.AllowOriginFunc(origin)
+	if allowOriginFunc != nil {
+		return allowOriginFunc(origin)
 	}
 	return false
 }
