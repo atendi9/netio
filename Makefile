@@ -1,2 +1,2 @@
 test:
-	@capivara ./... -v --race -cover
+	@capivara ./... -v --race -cover -tags=integration
