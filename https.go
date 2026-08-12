@@ -26,21 +26,23 @@ func (a *App) ListenHTTPS(certPath, keyPath string) error {
 		MinVersion:   tls.VersionTLS13,
 	}
 
-	ln, err := net.Listen("tcp", ":"+a.port)
+	// Reuses the listener New reserved when no port was configured. Binding a
+	// fresh one here would hit the port that listener already holds and fail
+	// with EADDRINUSE, which is what Listen avoids by reusing it too.
+	ln, err := a.bindListener()
 	if err != nil {
 		return fmt.Errorf("failed to listen on port %s: %w", a.port, err)
 	}
 
-	_, portStr, err := net.SplitHostPort(ln.Addr().String())
-	if err != nil {
-		return fmt.Errorf("failed to parse listener address: %w", err)
-	}
-	a.port = portStr
-
+	// Wrapping replaces the plain listener: closing the TLS one closes the
+	// TCP listener underneath, so Shutdown still releases the port.
 	tlsListener := tls.NewListener(ln, tlsConfig)
-	a.ln = tlsListener
+	if !a.setListener(tlsListener) {
+		tlsListener.Close()
+		return net.ErrClosed
+	}
 
-	a.startup()
+	a.startup(schemeHTTPS)
 
 	return a.acceptLoop(tlsListener)
 }
