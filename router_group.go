@@ -14,6 +14,10 @@ type Router interface {
 	Delete(path string, h ...Handler)
 	Patch(path string, h ...Handler)
 
+	// Query registers a handler for the QUERY method (RFC 10008), whose query
+	// travels in the request content instead of the URI.
+	Query(path string, h ...Handler)
+
 	// Group creates a new Router with the given path prefix and optional middleware.
 	//
 	// The returned Router inherits the current base path and middleware stack,
@@ -79,6 +83,13 @@ func (g *group) Delete(path string, h ...Handler) {
 
 func (g *group) Patch(path string, h ...Handler) {
 	g.app.PATCH(g.join(path), g.chain(h)...)
+}
+
+func (g *group) Query(path string, h ...Handler) {
+	// The guard is inserted inside the chain rather than by App.QUERY, so the
+	// group's middlewares run ahead of it and a request rejected for a missing
+	// Content-Type still carries whatever headers they set.
+	g.app.queryRoute(g.join(path), g.chain(guardContentType(h)))
 }
 
 func (g *group) Group(path string, m ...Handler) Router {

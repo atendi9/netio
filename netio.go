@@ -203,6 +203,45 @@ func (a *App) PATCH(path string, h ...Handler) {
 	a.registerOptions(path)
 }
 
+// QUERY registers a handler for the QUERY method (RFC 10008). QUERY carries the
+// query in the request content rather than the URI, and unlike POST it is both
+// safe and idempotent, so a client or intermediary may retry it freely.
+//
+// RFC 10008 §2 requires the server to fail a QUERY whose Content-Type is missing
+// or inconsistent with the content, so the missing case is rejected ahead of the
+// supplied handlers. Deciding whether a present Content-Type actually matches
+// the content is left to the handler, which is what knows the media type.
+func (a *App) QUERY(path string, h ...Handler) {
+	a.queryRoute(path, guardContentType(h))
+}
+
+// queryRoute registers an already-assembled QUERY chain. Group registration goes
+// through here so it can place the guard after its own middlewares instead of
+// ahead of them.
+func (a *App) queryRoute(path string, handlers []Handler) {
+	a.root.addMethod("QUERY", split(path), handlers)
+	a.registerOptions(path)
+}
+
+// guardContentType puts requireContentType immediately ahead of the handlers it
+// protects, so every middleware registered before them still runs and any
+// response header they set (CORS above all) survives a rejection.
+func guardContentType(h []Handler) []Handler {
+	guarded := make([]Handler, 0, len(h)+1)
+	guarded = append(guarded, requireContentType)
+	return append(guarded, h...)
+}
+
+// requireContentType aborts the chain with 400 when the request carries no
+// Content-Type. RFC 10008 §2: "Servers MUST fail the request if the Content-Type
+// request field is missing or is inconsistent with the request content."
+func requireContentType(c *Context) {
+	if c.Header("Content-Type") == "" {
+		c.SendStatus(http.StatusBadRequest)
+		c.Abort()
+	}
+}
+
 func (a *App) registerOptions(path string) {
 	a.root.addMethod("OPTIONS", split(path), []Handler{
 		func(c *Context) {

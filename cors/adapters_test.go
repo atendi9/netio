@@ -132,6 +132,10 @@ func (r *netioAdapter) Post(endpoint string, handlers ...netio.Handler) {
 	r.s.POST(endpoint, handlers...)
 }
 
+func (r *netioAdapter) Query(endpoint string, handlers ...netio.Handler) {
+	r.s.QUERY(endpoint, handlers...)
+}
+
 func (r *netioAdapter) Put(endpoint string, handlers ...netio.Handler) {
 	r.s.PUT(endpoint, handlers...)
 }
