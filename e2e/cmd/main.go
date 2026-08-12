@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/atendi9/netio"
-	"github.com/atendi9/netio/cors"
+	"github.com/atendi9/netio/v2"
+	"github.com/atendi9/netio/v2/cors"
 )
 
 func main() {

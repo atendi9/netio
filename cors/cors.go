@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/atendi9/netio"
+	"github.com/atendi9/netio/v2"
 )
 
 const wildcard = "*"

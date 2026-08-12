@@ -1,4 +1,4 @@
-module github.com/atendi9/netio
+module github.com/atendi9/netio/v2
 
 go 1.26.2
 

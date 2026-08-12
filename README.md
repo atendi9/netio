@@ -19,7 +19,7 @@ NetIO is a fast, minimalistic HTTP library built on top of native TCP connection
 ## 📦 Installation
 
 ```bash
-go get github.com/atendi9/netio
+go get github.com/atendi9/netio/v2
 ```
 
 ## 🚀 Quick Start
@@ -31,8 +31,8 @@ import (
     "encoding/json"
     "log"
 
-    "github.com/atendi9/netio"
-    "github.com/atendi9/netio/cors"
+    "github.com/atendi9/netio/v2"
+    "github.com/atendi9/netio/v2/cors"
 )
 
 func main() {
@@ -136,7 +136,7 @@ app.Use(func(c *netio.Context) {
 Import the `cors` subpackage:
 
 ```go
-import "github.com/atendi9/netio/cors"
+import "github.com/atendi9/netio/v2/cors"
 
 app.Use(cors.Middleware(cors.Config{
     AllowOrigins:     []string{"http://localhost:3000"},

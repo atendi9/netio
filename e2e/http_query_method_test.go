@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/atendi9/capivara/assert"
-	"github.com/atendi9/netio"
-	"github.com/atendi9/netio/cors"
+	"github.com/atendi9/netio/v2"
+	"github.com/atendi9/netio/v2/cors"
 )
 
 // QUERY (RFC 10008) over a real socket: the hand-rolled parser is method-

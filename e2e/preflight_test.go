@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/atendi9/capivara/assert"
-	"github.com/atendi9/netio"
-	"github.com/atendi9/netio/cors"
+	"github.com/atendi9/netio/v2"
+	"github.com/atendi9/netio/v2/cors"
 )
 
 // RFC 7230 §3.3.2 forbids Content-Length on a 204, and every CORS preflight is a

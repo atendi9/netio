@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/atendi9/capivara/assert"
-	"github.com/atendi9/netio"
+	"github.com/atendi9/netio/v2"
 )
 
 func TestNetIOStdHTTPCompat(t *testing.T) {

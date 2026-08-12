@@ -8,7 +8,7 @@ import (
 
 	"github.com/atendi9/capivara/assert"
 	"github.com/atendi9/handlerx"
-	"github.com/atendi9/netio"
+	"github.com/atendi9/netio/v2"
 )
 
 func TestCORSWithNetIOAdapter(t *testing.T) {
