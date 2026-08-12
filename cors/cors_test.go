@@ -370,6 +370,107 @@ func TestCORS_AllowAllOrigins(t *testing.T) {
 	assert.Equal(t, "*", allowedOrigin)
 }
 
+// A preflight for a path with no registered route must still run the middleware
+// chain: answering it inline would skip CORS and leave the browser with a bare
+// 204 carrying no headers.
+func TestPreflightOnUnregisteredRouteRunsMiddleware(t *testing.T) {
+	app := setupApp(cors.Config{
+		AllowOrigins: []string{"https://app.com"},
+		AllowMethods: []string{"GET", "POST"},
+	})
+
+	req := httptest.NewRequest(http.MethodOptions, "/no/such/route", nil)
+	req.Header.Set("Origin", "https://app.com")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+
+	res := rec.Result()
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", res.StatusCode)
+	}
+	assert.Equal(t, "https://app.com", res.Header.Get("Access-Control-Allow-Origin"))
+	assert.Equal(t, "GET, POST", res.Header.Get("Access-Control-Allow-Methods"))
+}
+
+// Config values commonly arrive from a single environment variable, so the
+// origin list must survive comma-joining, stray whitespace, a trailing slash
+// and mixed case rather than silently matching nothing.
+func TestOriginNormalization(t *testing.T) {
+	cases := []struct {
+		name         string
+		allowOrigins []string
+		origin       string
+	}{
+		{"trailing slash in config", []string{"https://app.com/"}, "https://app.com"},
+		{"trailing slash in request", []string{"https://app.com"}, "https://app.com/"},
+		{"comma-joined single entry", []string{"https://a.com,https://b.com"}, "https://b.com"},
+		{"whitespace around entries", []string{" https://a.com , https://b.com "}, "https://a.com"},
+		{"uppercase host in config", []string{"https://APP.com"}, "https://app.com"},
+		{"uppercase scheme in request", []string{"https://app.com"}, "HTTPS://app.com"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			url := startServer(t, cors.Config{
+				AllowOrigins:     tc.allowOrigins,
+				AllowMethods:     []string{"GET,POST", " OPTIONS "},
+				AllowCredentials: true,
+			})
+
+			res := preflight(t, url, tc.origin, "GET", "authorization")
+
+			if res.StatusCode != http.StatusNoContent {
+				t.Fatalf("expected 204, got %d", res.StatusCode)
+			}
+			// The raw request origin is echoed back, not the normalized form.
+			assertHeader(t, res, "Access-Control-Allow-Origin", tc.origin)
+			assertHeader(t, res, "Access-Control-Allow-Credentials", "true")
+			assertHeader(t, res, "Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		})
+	}
+}
+
+// A genuinely foreign origin must still be rejected after normalization.
+func TestOriginNormalizationDoesNotOverMatch(t *testing.T) {
+	url := startServer(t, cors.Config{
+		AllowOrigins: []string{"https://app.com"},
+	})
+
+	for _, origin := range []string{
+		"https://app.com.evil.com",
+		"http://app.com",
+		"https://app.com:8443",
+		"https://notapp.com",
+	} {
+		res := get(t, url, origin)
+		assertHeader(t, res, "Access-Control-Allow-Origin", "")
+	}
+}
+
+// AllowOriginFunc receives the origin exactly as the browser sent it.
+func TestAllowOriginFuncReceivesRawOrigin(t *testing.T) {
+	var seen string
+	url := startServer(t, cors.Config{
+		AllowOrigins: []string{"https://other.com"},
+		AllowOriginFunc: func(origin string) bool {
+			seen = origin
+			return true
+		},
+	})
+
+	const raw = "HTTPS://Sub.App.com/"
+	res := get(t, url, raw)
+
+	if seen != raw {
+		t.Fatalf("AllowOriginFunc got %q, expected raw %q", seen, raw)
+	}
+	assertHeader(t, res, "Access-Control-Allow-Origin", raw)
+}
+
 func setupApp(config cors.Config) *netio.App {
 	app, _ := netio.New(netio.AppConfig{})
 	app.Use(cors.Middleware(config))
