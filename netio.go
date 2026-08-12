@@ -355,6 +355,13 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx.method = []byte(r.Method)
 	ctx.path = []byte(r.URL.Path)
 
+	// The raw-socket parser fills ctx.query from the request line; without the
+	// same step here, Context.Query always read empty when the app was mounted
+	// as an http.Handler.
+	if raw := r.URL.RawQuery; raw != "" {
+		parseQueryString([]byte(raw), ctx)
+	}
+
 	// Store header keys lowercased so Context.Header lookups (which
 	// lowercase the requested key) match, mirroring the raw-socket parser.
 	for k, values := range r.Header {
