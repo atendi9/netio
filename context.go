@@ -25,6 +25,11 @@ type Context struct {
 	method []byte
 	path   []byte
 
+	// minorVersion is the minor of the request's HTTP/1.x version. It decides
+	// the default connection persistence: 0 (HTTP/1.0) closes unless the client
+	// asked for keep-alive, 1 and above stay open unless it asked to close.
+	minorVersion int
+
 	params    []KV
 	query     []KV
 	header    []KV
@@ -33,6 +38,11 @@ type Context struct {
 	body []byte
 
 	wrote bool
+
+	// suppressBody withholds the response body while keeping the headers that
+	// describe it, which is what makes a HEAD response identical to the GET
+	// one minus the payload (RFC 7231 §4.3.2).
+	suppressBody bool
 
 	// statusSet records whether a handler explicitly called Status(): a
 	// "handler forgot to write a body" fallback must honor that status
@@ -98,6 +108,7 @@ func (c *Context) Abort() { c.aborted = true }
 func (c *Context) reset() {
 	c.method = c.method[:0]
 	c.path = c.path[:0]
+	c.minorVersion = 0
 	c.params = c.params[:0]
 	c.query = c.query[:0]
 	c.header = c.header[:0]
@@ -109,6 +120,7 @@ func (c *Context) reset() {
 	c.status = 200
 	c.statusSet = false
 	c.wrote = false
+	c.suppressBody = false
 	c.isStdHTTP = false
 }
 

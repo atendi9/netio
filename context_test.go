@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -547,5 +548,137 @@ func TestContext_MapToStruct_UnexportedField(t *testing.T) {
 	}
 	if s.name != "" {
 		t.Error("expected unexported field to be ignored")
+	}
+}
+
+// Every numeric and boolean kind reports a parse failure instead of leaving the
+// field at its zero value, which would silently hand a handler bad input.
+func TestSetFieldValue_ParseErrors(t *testing.T) {
+	var target struct {
+		B   bool
+		I   int
+		U   uint
+		F   float64
+		Str string
+	}
+	v := reflect.ValueOf(&target).Elem()
+
+	tests := []struct {
+		name  string
+		field string
+		val   string
+	}{
+		{"bool", "B", "maybe"},
+		{"int", "I", "12x"},
+		{"uint", "U", "-1"},
+		{"float", "F", "1.2.3"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := setFieldValue(v.FieldByName(tt.field), tt.val); err == nil {
+				t.Errorf("setFieldValue(%s, %q) = nil, want error", tt.field, tt.val)
+			}
+		})
+	}
+
+	if err := setFieldValue(v.FieldByName("Str"), "ok"); err != nil {
+		t.Errorf("string field: %v", err)
+	}
+	if target.Str != "ok" {
+		t.Errorf("Str = %q, want %q", target.Str, "ok")
+	}
+}
+
+// Mounted as an http.Handler there is no raw conn to chunk onto, so the reader
+// is copied straight into the ResponseWriter.
+func TestContext_SendFileFromReader_StdHTTP(t *testing.T) {
+	rw := httptest.NewRecorder()
+	c := newContext()
+	c.isStdHTTP = true
+	c.w = rw
+	c.status = http.StatusOK
+
+	c.SendFileFromReader(io.NopCloser(strings.NewReader("stream-data")))
+
+	if rw.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rw.Code)
+	}
+	if got := rw.Body.String(); got != "stream-data" {
+		t.Errorf("body = %q, want %q", got, "stream-data")
+	}
+	if strings.Contains(rw.Header().Get("Transfer-Encoding"), "chunked") {
+		t.Error("std http path must not hand-roll chunked framing")
+	}
+}
+
+func TestContext_SendFileFromReader_StdHTTP_ReadError(t *testing.T) {
+	rw := httptest.NewRecorder()
+	c := newContext()
+	c.isStdHTTP = true
+	c.w = rw
+	c.status = http.StatusOK
+
+	c.SendFileFromReader(&errorReader{})
+
+	if rw.Body.Len() != 0 {
+		t.Errorf("body = %q, want empty", rw.Body.String())
+	}
+}
+
+// Mounted as an http.Handler, IP() reads r.RemoteAddr, falling back to the raw
+// value when it carries no port.
+func TestContext_IP_StdHTTP(t *testing.T) {
+	tests := []struct {
+		name       string
+		remoteAddr string
+		want       string
+	}{
+		{"host and port", "203.0.113.7:54321", "203.0.113.7"},
+		{"unparseable", "not-a-valid-addr", "not-a-valid-addr"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r.RemoteAddr = tt.remoteAddr
+			c := newContext()
+			c.isStdHTTP = true
+			c.r = r
+
+			if got := c.IP(); got != tt.want {
+				t.Errorf("IP() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// A peer that disappears mid-stream must abort the chunked loop rather than
+// keep writing into a dead connection. The first write is the header block, so
+// each later index is one step of a chunk: size line, data, trailing CRLF.
+func TestContext_SendFileFromReader_WriteErrors(t *testing.T) {
+	for name, writes := range map[string]int{
+		"fails on chunk size line": 1,
+		"fails on chunk data":      2,
+		"fails on chunk CRLF":      3,
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn := &failAfterNWrites{n: writes}
+			c := newContext()
+			c.conn = conn
+			c.logger = func(msgs ...string) {}
+
+			done := make(chan struct{})
+			go func() {
+				c.SendFileFromReader(io.NopCloser(strings.NewReader("stream-data")))
+				close(done)
+			}()
+
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("SendFileFromReader kept writing to a dead connection")
+			}
+		})
 	}
 }
