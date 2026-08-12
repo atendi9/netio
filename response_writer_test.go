@@ -2,6 +2,7 @@ package netio
 
 import (
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -115,5 +116,55 @@ func TestWriteResponse_RedactsSensitiveHeaderInLog(t *testing.T) {
 	// The wire response must still carry the real cookie value.
 	if !strings.Contains(rw.Body.String(), "session=topsecret") {
 		t.Errorf("redaction must not alter the wire response: %q", rw.Body.String())
+	}
+}
+
+// A status with no registered reason phrase still needs a well-formed status
+// line — an empty phrase would emit "HTTP/1.1 599 \r\n".
+func TestWriteResponse_UnknownStatusText(t *testing.T) {
+	rw := httptest.NewRecorder()
+	c := &Context{conn: &fakeConn{rw: rw}}
+
+	c.writeResponseWithHeaders(NewDefaultLogger("test"), 599, nil)
+
+	if got, want := rw.Body.String(), "HTTP/1.1 599 Unknown Status\r\n"; !strings.HasPrefix(got, want) {
+		t.Errorf("status line = %q, want prefix %q", got, want)
+	}
+}
+
+// RFC 7230 §3.3.2 forbids Content-Length on a bodyless status, so one set by a
+// handler is dropped rather than forwarded.
+func TestWriteResponse_DropsCallerContentLengthOnBodylessStatus(t *testing.T) {
+	for _, status := range []int{http.StatusNoContent, http.StatusContinue} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			rw := httptest.NewRecorder()
+			c := &Context{
+				conn:      &fakeConn{rw: rw},
+				resHeader: []KV{{K: []byte("Content-Length"), V: []byte("999")}},
+			}
+
+			c.writeResponseWithHeaders(NewDefaultLogger("test"), status, nil)
+
+			if strings.Contains(rw.Body.String(), "Content-Length") {
+				t.Errorf("Content-Length survived on %d: %q", status, rw.Body.String())
+			}
+		})
+	}
+}
+
+// The net/http path must honour a handler-set Content-Type instead of
+// sniffing one on top of it.
+func TestWriteResponse_StdHTTPContentTypePreserved(t *testing.T) {
+	rw := httptest.NewRecorder()
+	c := &Context{
+		isStdHTTP: true,
+		w:         rw,
+		resHeader: []KV{{K: []byte("Content-Type"), V: []byte("application/xml")}},
+	}
+
+	c.writeResponseWithHeaders(NewDefaultLogger("test"), 200, []byte("<x/>"))
+
+	if got := rw.Header().Values("Content-Type"); len(got) != 1 || got[0] != "application/xml" {
+		t.Errorf("Content-Type = %v, want [application/xml]", got)
 	}
 }

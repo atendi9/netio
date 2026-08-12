@@ -39,8 +39,14 @@ func (ctx *Context) writeResponseWithHeaders(
 			ctx.w.Header().Set("Content-Type", detectContentType(body))
 		}
 
+		// net/http drops a HEAD response's body but will not invent the
+		// Content-Length the discarded body would have had, so set it here.
+		if ctx.suppressBody && !isBodylessStatus(status) {
+			ctx.w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		}
+
 		ctx.w.WriteHeader(status)
-		if len(body) > 0 {
+		if len(body) > 0 && !ctx.suppressBody {
 			ctx.w.Write(body)
 		}
 		ctx.wrote = true
@@ -109,7 +115,11 @@ func (ctx *Context) writeResponseWithHeaders(
 	headerBlock := buf.String()
 
 	buf.WriteString("\r\n")
-	buf.Write(body)
+	// The Content-Length above still describes the body, which is exactly what
+	// a HEAD response must report while sending none of it.
+	if !ctx.suppressBody {
+		buf.Write(body)
+	}
 	responseBytes := buf.Bytes()
 
 	// Log the status/header block with sensitive header values redacted, so
