@@ -2,7 +2,6 @@ package netio
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -34,15 +33,19 @@ const defaultReadTimeout = 60 * time.Second
 const defaultMaxConns = 1024
 
 type App struct {
-	appName            string
-	port               string
-	startFn            startFn
-	logger             Logger
-	root               *node
-	mw                 []Handler
-	maxBodySize        int
-	readTimeout        time.Duration
+	appName     string
+	port        string
+	startFn     startFn
+	logger      Logger
+	root        *node
+	mw          []Handler
+	maxBodySize int
+	readTimeout time.Duration
+	// ln and closed are guarded by mu: Listen/ListenHTTPS publish the
+	// listener from their own goroutine while Shutdown reads it from the
+	// caller's.
 	ln                 net.Listener
+	closed             bool
 	activeConns        sync.WaitGroup
 	mu                 sync.Mutex
 	conns              map[net.Conn]struct{}
@@ -71,6 +74,11 @@ type AppConfig struct {
 }
 
 const defaultAppName = "netio"
+
+// continueResponse is the interim response to Expect: 100-continue. It is
+// written straight to the connection because an interim response precedes the
+// real one rather than replacing it, so it must not mark the Context written.
+var continueResponse = []byte("HTTP/1.1 100 Continue\r\n\r\n")
 
 func New(config AppConfig) (*App, error) {
 	maxBodySize, err := generateMaxBodySize(config.MaxBodySize)
@@ -203,6 +211,16 @@ func (a *App) PATCH(path string, h ...Handler) {
 	a.registerOptions(path)
 }
 
+// HEAD registers a handler for the HEAD method. Registering one is optional:
+// RFC 7231 §4.3.2 defines HEAD as GET without the message body, so a HEAD
+// request with no HEAD route of its own falls back to the GET handler and has
+// its body suppressed. Register explicitly only to answer HEAD differently —
+// to skip expensive work a GET would do, say.
+func (a *App) HEAD(path string, h ...Handler) {
+	a.root.addMethod("HEAD", split(path), h)
+	a.registerOptions(path)
+}
+
 // QUERY registers a handler for the QUERY method (RFC 10008). QUERY carries the
 // query in the request content rather than the URI, and unlike POST it is both
 // safe and idempotent, so a client or intermediary may retry it freely.
@@ -251,17 +269,90 @@ func (a *App) registerOptions(path string) {
 }
 
 func (a *App) Listen() error {
-	if a.ln == nil {
-		ln, err := net.Listen("tcp", ":"+a.port)
-		if err != nil {
-			return err
-		}
-		a.ln = ln
+	ln, err := a.bindListener()
+	if err != nil {
+		return err
 	}
 
-	a.startup()
+	if !a.setListener(ln) {
+		ln.Close()
+		return net.ErrClosed
+	}
 
-	return a.acceptLoop(a.ln)
+	a.startup(schemeHTTP)
+
+	return a.acceptLoop(ln)
+}
+
+// bindListener returns the listener to accept on: the one New reserved when no
+// port was configured, or a fresh one bound to a.port. Reusing the reserved
+// listener is what keeps the auto-port path from binding the same port twice.
+func (a *App) bindListener() (net.Listener, error) {
+	ln := a.listener()
+	if ln == nil {
+		var err error
+		if ln, err = net.Listen("tcp", ":"+a.port); err != nil {
+			return nil, err
+		}
+	}
+
+	// Port "0" asks the OS to choose one. Without reading the bound address
+	// back, a.port keeps the literal "0" and the startup callback reports a
+	// port nothing is listening on.
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		ln.Close()
+		return nil, err
+	}
+	a.port = port
+
+	return ln, nil
+}
+
+// listener returns the active listener, or nil before the first bind and after
+// Shutdown.
+func (a *App) listener() net.Listener {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	return a.ln
+}
+
+// setListener publishes ln as the active listener, reporting false when
+// Shutdown already ran. Without that check a Shutdown landing before the bind
+// returns nil while the server goes on accepting forever.
+func (a *App) setListener(ln net.Listener) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.closed {
+		return false
+	}
+	a.ln = ln
+
+	return true
+}
+
+// lookup resolves a route, falling back from HEAD to the GET handler when no
+// HEAD route is registered. RFC 7231 §4.3.2 makes HEAD identical to GET but for
+// the body, so every GET route answers HEAD for free — a server that 404s HEAD
+// breaks health checks and link checkers for no reason. The caller suppresses
+// the body; only the routing is decided here.
+func (a *App) lookup(method string, path []byte, params *[]KV) ([]Handler, bool) {
+	segments := splitBytes(path)
+
+	if h, ok := a.root.findMethod(method, segments, params); ok {
+		return h, true
+	}
+	if method != http.MethodHead {
+		return nil, false
+	}
+
+	// findMethod appends as it walks, so a failed attempt can leave partial
+	// params behind.
+	*params = (*params)[:0]
+
+	return a.root.findMethod(http.MethodGet, segments, params)
 }
 
 func (a *App) acceptLoop(ln net.Listener) error {
@@ -287,11 +378,16 @@ func (a *App) acceptLoop(ln net.Listener) error {
 // Shutdown gracefully shuts down the server: closes the listener and waits
 // for active connections to finish, respecting the context deadline.
 func (a *App) Shutdown(ctx context.Context) error {
-	if a.ln == nil {
-		return nil
-	}
+	a.mu.Lock()
+	a.closed = true
+	ln := a.ln
+	a.ln = nil
+	a.mu.Unlock()
 
-	err := a.ln.Close()
+	var err error
+	if ln != nil {
+		err = ln.Close()
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -308,12 +404,22 @@ func (a *App) Shutdown(ctx context.Context) error {
 	return err
 }
 
-func (a *App) startup() {
+// Schemes the startup banner reports, so an HTTPS server does not print a
+// http:// URL its own TLS listener rejects.
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
+func (a *App) startup(scheme string) {
 	if a.startFn != nil {
 		a.startFn(a.port)
 		return
 	}
-	a.log("http.server is running\n", fmt.Sprintf("http://localhost:%s\n", a.port))
+	a.log(
+		fmt.Sprintf("%s.server is running\n", scheme),
+		fmt.Sprintf("%s://localhost:%s\n", scheme, a.port),
+	)
 }
 
 func (a *App) trackConn(conn net.Conn, add bool) {
@@ -380,7 +486,7 @@ func (a *App) ServeFiles(endpoint, dirPath string) error {
 // This allows the app to be used in http.ListenAndServe.
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if a.isFirstStartupHTTP.Load() {
-		a.startup()
+		a.startup(schemeHTTP)
 		a.isFirstStartupHTTP.Store(false)
 	}
 	ctx := newContext()
@@ -415,8 +521,12 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body.Close()
 	}
 
+	if r.Method == http.MethodHead {
+		ctx.suppressBody = true
+	}
+
 	params := make([]KV, 0, 8)
-	h, ok := a.root.findMethod(r.Method, splitBytes(ctx.path), &params)
+	h, ok := a.lookup(r.Method, ctx.path, &params)
 
 	ctx.params = params
 	ctx.handlers = append([]Handler{}, a.mw...)
@@ -463,7 +573,23 @@ func (a *App) serve(conn net.Conn) {
 		ctx.conn = conn
 		ctx.maxBodySize = a.maxBodySize
 
-		result := parseRequest(r, ctx)
+		result := parseRequestHead(r, ctx)
+		if result == parseOK {
+			// Answered before the body is read: a client that sent
+			// Expect: 100-continue is waiting for this and will not upload
+			// until it arrives.
+			switch result = expectation(ctx); result {
+			case parseContinue:
+				if _, err := conn.Write(continueResponse); err != nil {
+					return
+				}
+				result = parseOK
+			}
+		}
+		if result == parseOK {
+			result = parseBody(r, ctx)
+		}
+
 		switch result {
 		case parseEOF:
 			return
@@ -473,10 +599,20 @@ func (a *App) serve(conn net.Conn) {
 		case parseTooLarge:
 			ctx.SendStatus(http.StatusRequestEntityTooLarge)
 			return
+		case parseBadVersion:
+			ctx.SendStatus(http.StatusHTTPVersionNotSupported)
+			return
+		case parseBadExpect:
+			ctx.SendStatus(http.StatusExpectationFailed)
+			return
+		}
+
+		if ctx.Method() == http.MethodHead {
+			ctx.suppressBody = true
 		}
 
 		params := make([]KV, 0, 8)
-		h, ok := a.root.findMethod(string(ctx.method), splitBytes(ctx.path), &params)
+		h, ok := a.lookup(ctx.Method(), ctx.path, &params)
 
 		ctx.params = params
 		ctx.handlers = append([]Handler{}, a.mw...)
@@ -493,24 +629,23 @@ func (a *App) serve(conn net.Conn) {
 			})
 		}
 
+		// Decided before dispatch so it can be announced: RFC 7230 §6.6 asks a
+		// server that is about to close to say so, which a handler can only do
+		// if the header is in place before it writes.
+		reuse := keepAlive(ctx)
+		if !reuse {
+			ctx.HeaderSet("Connection", "close")
+		}
+
 		ctx.index = -1
 		ctx.Next()
 
 		ctx.finalizeNoBody()
 
-		if !keepAlive(ctx) {
+		if !reuse {
 			return
 		}
 	}
-}
-
-func header(c *Context, k []byte) []byte {
-	for i := range c.header {
-		if bytes.Equal(c.header[i].K, k) {
-			return c.header[i].V
-		}
-	}
-	return nil
 }
 
 func detectContentType(body []byte) string {

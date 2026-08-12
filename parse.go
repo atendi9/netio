@@ -16,6 +16,11 @@ const (
 	parseEOF      parseResult = -1
 	parseTooLarge parseResult = 413
 	parseBadReq   parseResult = 400
+	// parseBadVersion marks a request whose HTTP major version this server does
+	// not implement. RFC 7230 §2.6 asks for 505 rather than a blanket 400.
+	parseBadVersion parseResult = 505
+	// parseBadExpect marks an Expect the server cannot meet (RFC 7231 §5.1.1).
+	parseBadExpect parseResult = 417
 )
 
 // Parser limits, mirroring the protections net/http provides. A hand-rolled
@@ -31,6 +36,17 @@ const (
 )
 
 func parseRequest(r *bufio.Reader, c *Context) parseResult {
+	if res := parseRequestHead(r, c); res != parseOK {
+		return res
+	}
+
+	return parseBody(r, c)
+}
+
+// parseRequestHead reads the request line and header block, stopping short of
+// the body so the caller can answer an Expect: 100-continue before the client
+// starts uploading.
+func parseRequestHead(r *bufio.Reader, c *Context) parseResult {
 	line, err := readLimitedLine(r, maxRequestLineSize)
 	if err != nil {
 		if err == errLineTooLong {
@@ -39,15 +55,38 @@ func parseRequest(r *bufio.Reader, c *Context) parseResult {
 		return parseEOF
 	}
 
-	if !parseRequestLine(line, c) {
-		return parseBadReq
-	}
-	if res := parseHeaders(r, c); res != parseOK {
+	if res := parseRequestLine(line, c); res != parseOK {
 		return res
 	}
 
-	return parseBody(r, c)
+	return parseHeaders(r, c)
 }
+
+// expectation classifies the request's Expect field. RFC 7231 §5.1.1 defines
+// only "100-continue"; anything else the server does not understand is a 417
+// rather than a header to read past. HTTP/1.0 has no interim responses, so the
+// field is ignored there.
+func expectation(c *Context) parseResult {
+	values := headerValues(c, []byte("expect"))
+	if len(values) == 0 {
+		return parseOK
+	}
+
+	for _, v := range values {
+		if !bytes.EqualFold(bytes.TrimSpace(v), []byte("100-continue")) {
+			return parseBadExpect
+		}
+	}
+	if c.minorVersion == 0 {
+		return parseOK
+	}
+
+	return parseContinue
+}
+
+// parseContinue reports that the client is waiting for a 100 Continue before it
+// sends the body.
+const parseContinue parseResult = 100
 
 var errLineTooLong = errors.New("netio: line exceeds size limit")
 
@@ -72,19 +111,32 @@ func readLimitedLine(r *bufio.Reader, limit int) ([]byte, error) {
 	}
 }
 
-func parseRequestLine(line []byte, c *Context) bool {
+func parseRequestLine(line []byte, c *Context) parseResult {
 	i := bytes.IndexByte(line, ' ')
 	if i == -1 {
-		return false
+		return parseBadReq
 	}
 	c.method = line[:i]
 
 	rest := line[i+1:]
 	j := bytes.IndexByte(rest, ' ')
 	if j == -1 {
-		return false
+		return parseBadReq
 	}
 	uri := rest[:j]
+
+	// The version token used to be discarded, which served any garbage in its
+	// place as a valid request and left every client looking like HTTP/1.1.
+	major, minor, ok := parseHTTPVersion(bytes.TrimRight(rest[j+1:], "\r\n"))
+	if !ok {
+		return parseBadReq
+	}
+	if major != 1 {
+		return parseBadVersion
+	}
+	c.minorVersion = minor
+
+	uri = requestTargetPath(uri)
 
 	if q := bytes.IndexByte(uri, '?'); q != -1 {
 		c.path = uri[:q]
@@ -92,7 +144,44 @@ func parseRequestLine(line []byte, c *Context) bool {
 	} else {
 		c.path = uri
 	}
-	return true
+	return parseOK
+}
+
+// requestTargetPath reduces a request-target to the path the router matches on.
+// RFC 7230 §5.3.2 requires accepting the absolute-form ("GET http://host/p"),
+// which every proxy forwards verbatim: routing on the raw target instead 404s
+// any request that reached the server through one.
+func requestTargetPath(uri []byte) []byte {
+	if len(uri) == 0 || uri[0] == '/' {
+		return uri
+	}
+
+	i := bytes.Index(uri, []byte("://"))
+	if i == -1 {
+		return uri
+	}
+
+	authority := uri[i+len("://"):]
+	if j := bytes.IndexByte(authority, '/'); j != -1 {
+		return authority[j:]
+	}
+
+	// "http://example.com" with no path addresses the origin's root.
+	return []byte("/")
+}
+
+// parseHTTPVersion parses the "HTTP/<major>.<minor>" token of a request line.
+// RFC 7230 §2.6 fixes both numbers at exactly one DIGIT.
+func parseHTTPVersion(v []byte) (major, minor int, ok bool) {
+	const prefix = "HTTP/"
+	if len(v) != len(prefix)+3 || !bytes.HasPrefix(v, []byte(prefix)) {
+		return 0, 0, false
+	}
+	maj, dot, min := v[len(prefix)], v[len(prefix)+1], v[len(prefix)+2]
+	if !isDigit(maj) || dot != '.' || !isDigit(min) {
+		return 0, 0, false
+	}
+	return int(maj - '0'), int(min - '0'), true
 }
 
 // parseHeaders reads the header block. It distinguishes a clean end-of-headers
@@ -105,7 +194,13 @@ func parseHeaders(r *bufio.Reader, c *Context) parseResult {
 			return parseBadReq
 		}
 
-		if len(bytes.TrimSpace(line)) == 0 {
+		// Only the line terminator is stripped: a line of blanks is a malformed
+		// header, not the end of the block. Treating it as a terminator would
+		// end the request here while a stricter proxy read on, which is exactly
+		// the disagreement request smuggling exploits.
+		field := bytes.TrimRight(line, "\r\n")
+
+		if len(field) == 0 {
 			if err != nil {
 				// Truncated header block: no terminating blank line.
 				return parseBadReq
@@ -123,15 +218,47 @@ func parseHeaders(r *bufio.Reader, c *Context) parseResult {
 			return parseBadReq
 		}
 
-		i := bytes.IndexByte(line, ':')
-		if i == -1 {
-			continue
+		// RFC 7230 §3.2.4: a server MUST reject a request whose header line
+		// begins with whitespace (obs-fold) or whose field-name is separated
+		// from the colon by whitespace. Trimming the name into shape instead is
+		// the classic smuggling primitive: a proxy that rejects "Content-Length
+		// : 5" and a server that honours it disagree on where the body ends.
+		if isOWS(field[0]) {
+			return parseBadReq
 		}
-		k := bytes.ToLower(bytes.TrimSpace(line[:i]))
-		v := bytes.TrimSpace(line[i+1:])
+
+		i := bytes.IndexByte(field, ':')
+		if i == -1 {
+			// A line that is not a field at all was skipped before. Skipping is
+			// the same disagreement as reshaping: a proxy that rejects the line
+			// and a server that ignores it read different requests.
+			return parseBadReq
+		}
+		if i == 0 || isOWS(field[i-1]) {
+			return parseBadReq
+		}
+
+		k := bytes.ToLower(field[:i])
+		v := bytes.TrimSpace(field[i+1:])
 
 		c.header = append(c.header, KV{k, v})
 	}
+}
+
+// isOWS reports whether b is optional whitespace as RFC 7230 §3.2.3 defines it.
+func isOWS(b byte) bool { return b == ' ' || b == '\t' }
+
+// headerValues returns every value recorded under k. The framing headers have
+// to be read as a set: header() yields only the first match, so a second
+// Content-Length carrying a different length would go unnoticed.
+func headerValues(c *Context, k []byte) [][]byte {
+	var values [][]byte
+	for i := range c.header {
+		if bytes.Equal(c.header[i].K, k) {
+			values = append(values, c.header[i].V)
+		}
+	}
+	return values
 }
 
 func parseQueryString(qs []byte, c *Context) {
@@ -156,19 +283,26 @@ func parseQueryString(qs []byte, c *Context) {
 }
 
 func parseBody(r *bufio.Reader, c *Context) parseResult {
-	cl := header(c, []byte("content-length"))
-	te := header(c, []byte("transfer-encoding"))
+	cls := headerValues(c, []byte("content-length"))
+	tes := headerValues(c, []byte("transfer-encoding"))
 
-	// RFC 7230 §3.3.3: a request carrying both Content-Length and
-	// Transfer-Encoding is ambiguous and a known request-smuggling primitive
-	// behind a proxy — reject it outright.
-	if cl != nil && te != nil {
+	// RFC 7230 §3.3.3: repeated Content-Length fields whose values disagree, or
+	// a Transfer-Encoding applied more than once, leave the message framing
+	// undefined. Picking the first value and reading on is what lets an attacker
+	// hide a second request inside the first one's body.
+	if !allSameValue(cls) || len(tes) > 1 {
 		return parseBadReq
 	}
 
-	if cl != nil {
-		n, err := strconv.Atoi(string(cl))
-		if err != nil || n < 0 {
+	// A request carrying both Content-Length and Transfer-Encoding is ambiguous
+	// for the same reason — reject it outright.
+	if len(cls) > 0 && len(tes) > 0 {
+		return parseBadReq
+	}
+
+	if len(cls) > 0 {
+		n, ok := parseContentLength(cls[0])
+		if !ok {
 			return parseBadReq
 		}
 		if n == 0 {
@@ -185,8 +319,8 @@ func parseBody(r *bufio.Reader, c *Context) parseResult {
 		return parseOK
 	}
 
-	if te != nil {
-		switch transferEncodingKind(te) {
+	if len(tes) > 0 {
+		switch transferEncodingKind(tes[0]) {
 		case teChunked:
 			return parseChunked(r, c)
 		case teIdentity:
@@ -199,6 +333,62 @@ func parseBody(r *bufio.Reader, c *Context) parseResult {
 	}
 
 	return parseOK
+}
+
+// allSameValue reports whether every repetition of a field carries the same
+// value. Identical repeats are harmless and RFC 7230 §3.3.3 allows collapsing
+// them; differing ones are an unrecoverable framing error.
+func allSameValue(values [][]byte) bool {
+	for _, v := range values[min(len(values), 1):] {
+		if !bytes.Equal(v, values[0]) {
+			return false
+		}
+	}
+	return true
+}
+
+// parseContentLength parses a Content-Length value. RFC 7230 §3.3.2 defines it
+// as 1*DIGIT, so the digits are checked before strconv sees the value: Atoi
+// also accepts a sign, and a "+5" this server reads as 5 while a strict proxy
+// rejects the field entirely is a body-length disagreement.
+func parseContentLength(v []byte) (int, bool) {
+	if len(v) == 0 || !allDigits(v, isDigit) {
+		return 0, false
+	}
+	n, err := strconv.Atoi(string(v))
+	if err != nil {
+		// Digits that overflow int.
+		return 0, false
+	}
+	return n, true
+}
+
+// parseChunkSize parses a chunk-size, which RFC 7230 §4.1 defines as 1*HEXDIG.
+// Same reasoning as parseContentLength: ParseInt would accept a signed value.
+func parseChunkSize(v []byte) (int64, bool) {
+	if len(v) == 0 || !allDigits(v, isHexDigit) {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(string(v), 16, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+func allDigits(v []byte, valid func(byte) bool) bool {
+	for _, b := range v {
+		if !valid(b) {
+			return false
+		}
+	}
+	return true
+}
+
+func isDigit(b byte) bool { return b >= '0' && b <= '9' }
+
+func isHexDigit(b byte) bool {
+	return isDigit(b) || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F')
 }
 
 type teKind int
@@ -226,9 +416,34 @@ func transferEncodingKind(te []byte) teKind {
 	}
 }
 
+// keepAlive reports whether the connection may carry another request.
+// RFC 7230 §6.1 makes Connection a case-insensitive comma-separated list, so an
+// exact match against "close" missed "Close" and "keep-alive, close" and left
+// the connection pinned for the whole read deadline. §6.3 defaults to close
+// below HTTP/1.1: a 1.0 client that did not ask for keep-alive waits for the
+// close rather than sending a second request.
 func keepAlive(c *Context) bool {
-	v := header(c, []byte("connection"))
-	return !bytes.Equal(v, []byte("close"))
+	if connectionHasToken(c, "close") {
+		return false
+	}
+	if c.minorVersion == 0 {
+		return connectionHasToken(c, "keep-alive")
+	}
+	return true
+}
+
+// connectionHasToken reports whether the Connection field carries token. The
+// token may appear in any case, at any position of the comma-separated list,
+// and spread over repeated Connection header lines.
+func connectionHasToken(c *Context, token string) bool {
+	for _, v := range headerValues(c, []byte("connection")) {
+		for _, t := range bytes.Split(v, []byte(",")) {
+			if bytes.EqualFold(bytes.TrimSpace(t), []byte(token)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func parseChunked(r *bufio.Reader, c *Context) parseResult {
@@ -246,8 +461,8 @@ func parseChunked(r *bufio.Reader, c *Context) parseResult {
 			sizeField = bytes.TrimSpace(sizeField[:i])
 		}
 
-		size, err := strconv.ParseInt(string(sizeField), 16, 64)
-		if err != nil || size < 0 {
+		size, ok := parseChunkSize(sizeField)
+		if !ok {
 			return parseBadReq
 		}
 
