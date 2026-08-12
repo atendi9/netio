@@ -5,3 +5,6 @@ coverage.html
 
 # Local ai-jail sandbox configuration
 .ai-jail
+
+# Test artifacts
+.capivara
