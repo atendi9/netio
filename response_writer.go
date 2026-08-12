@@ -62,6 +62,8 @@ func (ctx *Context) writeResponseWithHeaders(
 	buf.WriteString(statusText)
 	buf.WriteString("\r\n")
 
+	bodyless := isBodylessStatus(status)
+
 	hasContentType := false
 	hasContentLength := false
 	hasTransferEncoding := false
@@ -72,6 +74,11 @@ func (ctx *Context) writeResponseWithHeaders(
 			hasContentType = true
 		}
 		if strings.EqualFold(key, "Content-Length") {
+			// RFC 7230 §3.3.2 forbids Content-Length on 1xx and 204 outright,
+			// so a caller-set one is dropped rather than forwarded.
+			if bodyless {
+				continue
+			}
 			hasContentLength = true
 		}
 		if strings.EqualFold(key, "Transfer-Encoding") {
@@ -90,8 +97,10 @@ func (ctx *Context) writeResponseWithHeaders(
 		buf.WriteString("\r\n")
 	}
 
-	// RFC 7230: MUST NOT send Content-Length with Transfer-Encoding
-	if !hasContentLength && !hasTransferEncoding {
+	// RFC 7230 §3.3.2: MUST NOT send Content-Length with Transfer-Encoding, nor
+	// on a status that defines no body (1xx, 204). CORS preflights answer 204,
+	// so emitting it there put a spec violation on every preflight response.
+	if !hasContentLength && !hasTransferEncoding && !bodyless {
 		buf.WriteString("Content-Length: ")
 		buf.WriteString(strconv.Itoa(len(body)))
 		buf.WriteString("\r\n")
@@ -110,6 +119,13 @@ func (ctx *Context) writeResponseWithHeaders(
 	_, err := ctx.conn.Write(responseBytes)
 	ctx.wrote = true
 	return err
+}
+
+// isBodylessStatus reports whether the status code defines no message body, per
+// RFC 7230 §3.3.2. 304 is excluded on purpose: its Content-Length describes the
+// body the equivalent 200 would have carried, so it stays valid there.
+func isBodylessStatus(status int) bool {
+	return status < http.StatusOK || status == http.StatusNoContent
 }
 
 // sensitiveResponseHeaders are header names whose values must not be logged.
