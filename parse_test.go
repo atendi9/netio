@@ -137,16 +137,15 @@ func TestParseRequestLine_MalformedOneSpace(t *testing.T) {
 	}
 }
 
+// A line with no colon is not a header field. Skipping it — which is what the
+// parser used to do — is the same disagreement as reshaping one: a proxy that
+// rejects the line and a server that ignores it read different requests.
 func TestParseHeaders_MalformedNoColon(t *testing.T) {
 	req := "GET / HTTP/1.1\r\nBadHeaderWithoutColon\r\nHost: ok\r\n\r\n"
 	r := bufio.NewReader(bytes.NewBufferString(req))
 	c := &Context{}
-	if result := parseRequest(r, c); result != parseOK {
-		t.Fatalf("parseRequest failed with %d", result)
-	}
-	// The malformed header is skipped, only Host is parsed
-	if len(c.header) != 1 || string(c.header[0].K) != "host" {
-		t.Errorf("expected only 'host' header, got %v", c.header)
+	if result := parseRequest(r, c); result != parseBadReq {
+		t.Errorf("parseRequest = %d, want parseBadReq", result)
 	}
 }
 
@@ -282,35 +281,83 @@ func TestParseBody_IdentityTransferEncoding(t *testing.T) {
 	}
 }
 
+// RFC 7230 §6.1 makes Connection a case-insensitive comma-separated list, and
+// §6.3 defaults to close below HTTP/1.1. An exact byte comparison against
+// "close" missed most real spellings and pinned the connection for the whole
+// read deadline; treating HTTP/1.0 as persistent left those clients waiting.
 func TestKeepAlive(t *testing.T) {
+	connection := func(values ...string) []KV {
+		kvs := make([]KV, 0, len(values))
+		for _, v := range values {
+			kvs = append(kvs, KV{K: []byte("connection"), V: []byte(v)})
+		}
+		return kvs
+	}
+
 	tests := []struct {
 		name     string
+		minor    int
 		headers  []KV
 		expected bool
 	}{
-		{
-			name:     "Connection close",
-			headers:  []KV{{K: []byte("connection"), V: []byte("close")}},
-			expected: false,
-		},
-		{
-			name:     "Connection keep-alive",
-			headers:  []KV{{K: []byte("connection"), V: []byte("keep-alive")}},
-			expected: true,
-		},
-		{
-			name:     "Connection missing",
-			headers:  []KV{},
-			expected: true,
-		},
+		{name: "1.1 without Connection", minor: 1, headers: nil, expected: true},
+		{name: "1.1 close", minor: 1, headers: connection("close"), expected: false},
+		{name: "1.1 Close", minor: 1, headers: connection("Close"), expected: false},
+		{name: "1.1 CLOSE", minor: 1, headers: connection("CLOSE"), expected: false},
+		{name: "1.1 keep-alive", minor: 1, headers: connection("keep-alive"), expected: true},
+		{name: "1.1 list ending in close", minor: 1, headers: connection("keep-alive, close"), expected: false},
+		{name: "1.1 list starting with close", minor: 1, headers: connection("close, keep-alive"), expected: false},
+		{name: "1.1 list with padding", minor: 1, headers: connection("Upgrade ,\tClose "), expected: false},
+		{name: "1.1 close on a repeated field", minor: 1, headers: connection("keep-alive", "close"), expected: false},
+		{name: "1.1 unrelated token", minor: 1, headers: connection("Upgrade"), expected: true},
+		{name: "1.0 without Connection", minor: 0, headers: nil, expected: false},
+		{name: "1.0 keep-alive", minor: 0, headers: connection("keep-alive"), expected: true},
+		{name: "1.0 Keep-Alive", minor: 0, headers: connection("Keep-Alive"), expected: true},
+		{name: "1.0 close", minor: 0, headers: connection("close"), expected: false},
+		{name: "1.0 keep-alive and close", minor: 0, headers: connection("keep-alive, close"), expected: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := &Context{header: tt.headers}
-			got := keepAlive(c)
-			if got != tt.expected {
-				t.Errorf("keepAlive() = %v; want %v", got, tt.expected)
+			c := &Context{header: tt.headers, minorVersion: tt.minor}
+			if got := keepAlive(c); got != tt.expected {
+				t.Errorf("keepAlive() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+// The version token was previously discarded, so anything in its place was
+// served as a valid HTTP/1.1 request.
+func TestParseRequestLine_Version(t *testing.T) {
+	tests := []struct {
+		name  string
+		line  string
+		want  parseResult
+		minor int
+	}{
+		{name: "HTTP/1.1", line: "GET / HTTP/1.1", want: parseOK, minor: 1},
+		{name: "HTTP/1.0", line: "GET / HTTP/1.0", want: parseOK, minor: 0},
+		{name: "HTTP/1.9 treated as 1.x", line: "GET / HTTP/1.9", want: parseOK, minor: 9},
+		{name: "HTTP/2.0", line: "GET / HTTP/2.0", want: parseBadVersion},
+		{name: "HTTP/0.9", line: "GET / HTTP/0.9", want: parseBadVersion},
+		{name: "garbage token", line: "GET / JUNK", want: parseBadReq},
+		{name: "missing minor", line: "GET / HTTP/1", want: parseBadReq},
+		{name: "non-digit version", line: "GET / HTTP/x.y", want: parseBadReq},
+		{name: "trailing junk after version", line: "GET / HTTP/1.1 extra", want: parseBadReq},
+		{name: "empty version", line: "GET / ", want: parseBadReq},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := bufio.NewReader(bytes.NewBufferString(tt.line + "\r\nHost: x\r\n\r\n"))
+			c := &Context{}
+			got := parseRequest(r, c)
+			if got != tt.want {
+				t.Fatalf("parseRequest = %d, want %d", got, tt.want)
+			}
+			if tt.want == parseOK && c.minorVersion != tt.minor {
+				t.Errorf("minorVersion = %d, want %d", c.minorVersion, tt.minor)
 			}
 		})
 	}
@@ -362,5 +409,352 @@ func TestParseChunked_BadChunkTerminator(t *testing.T) {
 	c := &Context{}
 	if result := parseRequest(r, c); result != parseBadReq {
 		t.Fatalf("expected parseBadReq for bad chunk terminator, got %d", result)
+	}
+}
+
+// A request whose header block, body, or chunk framing is cut short must be
+// rejected rather than dispatched: the truncation branches are what stop a peer
+// that dies mid-request from reaching a handler with a half-read Context.
+func TestParseRequest_Truncated(t *testing.T) {
+	tests := []struct {
+		name string
+		req  string
+		want parseResult
+	}{
+		{
+			name: "header block with no terminating blank line",
+			req:  "GET / HTTP/1.1\r\nHost: example.com",
+			want: parseBadReq,
+		},
+		{
+			name: "body shorter than Content-Length",
+			req:  "POST / HTTP/1.1\r\ncontent-length: 10\r\n\r\nabc",
+			want: parseBadReq,
+		},
+		{
+			name: "chunked with no chunk-size line",
+			req:  "POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n",
+			want: parseBadReq,
+		},
+		{
+			name: "chunk data shorter than its size",
+			req:  "POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n5\r\nab",
+			want: parseBadReq,
+		},
+		{
+			name: "chunk data with no terminating CRLF",
+			req:  "POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n5\r\nhello",
+			want: parseBadReq,
+		},
+		{
+			name: "chunk data followed by garbage instead of CRLF",
+			req:  "POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n5\r\nhelloXX\r\n0\r\n\r\n",
+			want: parseBadReq,
+		},
+		{
+			name: "last-chunk with no terminating blank line",
+			req:  "POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n0\r\n",
+			want: parseBadReq,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := bufio.NewReader(bytes.NewBufferString(tt.req))
+			c := &Context{}
+			if got := parseRequest(r, c); got != tt.want {
+				t.Errorf("parseRequest = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// Content-Length: 0 short-circuits before allocating, and must still leave the
+// request parseable with an empty body.
+func TestParseBody_ZeroContentLength(t *testing.T) {
+	req := "POST /data HTTP/1.1\r\ncontent-length: 0\r\n\r\n"
+	r := bufio.NewReader(bytes.NewBufferString(req))
+	c := &Context{}
+	if result := parseRequest(r, c); result != parseOK {
+		t.Fatalf("parseRequest = %d, want parseOK", result)
+	}
+	if len(c.body) != 0 {
+		t.Errorf("body = %q, want empty", c.body)
+	}
+}
+
+// Trailers after the last chunk are consumed, not mistaken for the next
+// pipelined request.
+func TestParseChunked_WithTrailer(t *testing.T) {
+	req := "POST / HTTP/1.1\r\ntransfer-encoding: chunked\r\n\r\n" +
+		"5\r\nhello\r\n0\r\nX-Checksum: abc\r\n\r\n"
+	r := bufio.NewReader(bytes.NewBufferString(req))
+	c := &Context{}
+	if result := parseRequest(r, c); result != parseOK {
+		t.Fatalf("parseRequest = %d, want parseOK", result)
+	}
+	if string(c.body) != "hello" {
+		t.Errorf("body = %q, want %q", c.body, "hello")
+	}
+	if r.Buffered() != 0 {
+		t.Errorf("%d bytes left buffered, trailer was not consumed", r.Buffered())
+	}
+}
+
+// RFC 7230 §3.2.4 requires rejecting a header the parser would otherwise have
+// to reshape. Every case here is a framing disagreement a proxy in front of the
+// server could be talked into: reshaping the field instead of rejecting it lets
+// the two sides read different requests out of the same bytes.
+func TestParseHeaders_MalformedFieldLine(t *testing.T) {
+	tests := []struct {
+		name string
+		req  string
+		want parseResult
+	}{
+		{
+			name: "space between field-name and colon",
+			req:  "POST / HTTP/1.1\r\nContent-Length : 5\r\n\r\nhello",
+			want: parseBadReq,
+		},
+		{
+			name: "tab between field-name and colon",
+			req:  "POST / HTTP/1.1\r\nContent-Length\t: 5\r\n\r\nhello",
+			want: parseBadReq,
+		},
+		{
+			name: "obs-fold continuation line",
+			req:  "POST / HTTP/1.1\r\nHost: x\r\n Content-Length: 5\r\n\r\nhello",
+			want: parseBadReq,
+		},
+		{
+			name: "leading whitespace on the first field line",
+			req:  "POST / HTTP/1.1\r\n\tContent-Length: 5\r\n\r\nhello",
+			want: parseBadReq,
+		},
+		{
+			name: "empty field-name",
+			req:  "POST / HTTP/1.1\r\n: 5\r\n\r\n",
+			want: parseBadReq,
+		},
+		{
+			name: "blank-looking line does not end the header block",
+			req:  "POST / HTTP/1.1\r\nHost: x\r\n \r\nContent-Length: 5\r\n\r\nhello",
+			want: parseBadReq,
+		},
+		{
+			name: "well-formed headers still parse",
+			req:  "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello",
+			want: parseOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := bufio.NewReader(bytes.NewBufferString(tt.req))
+			c := &Context{}
+			if got := parseRequest(r, c); got != tt.want {
+				t.Errorf("parseRequest = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// RFC 7230 §3.3.3: repeated framing headers that disagree leave the message
+// length undefined, so the request is unrecoverable rather than resolved by
+// picking one value.
+func TestParseBody_RepeatedFramingHeaders(t *testing.T) {
+	tests := []struct {
+		name string
+		req  string
+		want parseResult
+	}{
+		{
+			name: "conflicting Content-Length",
+			req:  "POST / HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 11\r\n\r\nhelloworld!",
+			want: parseBadReq,
+		},
+		{
+			name: "identical Content-Length repeated",
+			req:  "POST / HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\nhello",
+			want: parseOK,
+		},
+		{
+			name: "repeated Transfer-Encoding",
+			req:  "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: identity\r\n\r\n0\r\n\r\n",
+			want: parseBadReq,
+		},
+		{
+			name: "Content-Length and Transfer-Encoding together",
+			req:  "POST / HTTP/1.1\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+			want: parseBadReq,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := bufio.NewReader(bytes.NewBufferString(tt.req))
+			c := &Context{}
+			if got := parseRequest(r, c); got != tt.want {
+				t.Errorf("parseRequest = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// Content-Length is 1*DIGIT (RFC 7230 §3.3.2) and chunk-size is 1*HEXDIG
+// (§4.1). strconv accepts a leading sign on both, which this server must not:
+// a value it reads as a length while a strict proxy rejects the field outright
+// is a body-length disagreement.
+func TestParseBody_FramingGrammar(t *testing.T) {
+	contentLengths := []struct {
+		value string
+		want  parseResult
+	}{
+		{"5", parseOK},
+		{"  5  ", parseOK}, // OWS around a field-value is allowed and trimmed
+		{"+5", parseBadReq},
+		{"-0", parseBadReq},
+		{"-5", parseBadReq},
+		{"0x5", parseBadReq},
+		{"5abc", parseBadReq},
+		{"", parseBadReq},
+		{"99999999999999999999", parseBadReq}, // overflows int
+	}
+
+	for _, tt := range contentLengths {
+		t.Run("Content-Length "+tt.value, func(t *testing.T) {
+			req := "POST / HTTP/1.1\r\nContent-Length: " + tt.value + "\r\n\r\nhello"
+			r := bufio.NewReader(bytes.NewBufferString(req))
+			c := &Context{}
+			if got := parseRequest(r, c); got != tt.want {
+				t.Errorf("parseRequest = %d, want %d", got, tt.want)
+			}
+		})
+	}
+
+	chunkSizes := []struct {
+		value string
+		want  parseResult
+	}{
+		{"5", parseOK},
+		{"5;ext=1", parseOK}, // chunk extensions stay allowed
+		{"+5", parseBadReq},
+		{"-5", parseBadReq},
+		{"0x5", parseBadReq},
+		{"", parseBadReq},
+		{"FFFFFFFFFFFFFFFFF", parseBadReq}, // hex digits that overflow int64
+	}
+
+	for _, tt := range chunkSizes {
+		t.Run("chunk-size "+tt.value, func(t *testing.T) {
+			req := "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n" +
+				tt.value + "\r\nhello\r\n0\r\n\r\n"
+			r := bufio.NewReader(bytes.NewBufferString(req))
+			c := &Context{}
+			if got := parseRequest(r, c); got != tt.want {
+				t.Errorf("parseRequest = %d, want %d", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("uppercase hex chunk-size", func(t *testing.T) {
+		req := "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nA\r\n0123456789\r\n0\r\n\r\n"
+		r := bufio.NewReader(bytes.NewBufferString(req))
+		c := &Context{}
+		if got := parseRequest(r, c); got != parseOK {
+			t.Fatalf("parseRequest = %d, want parseOK", got)
+		}
+		if string(c.body) != "0123456789" {
+			t.Errorf("body = %q, want %q", c.body, "0123456789")
+		}
+	})
+}
+
+// RFC 7230 §5.3.2 requires accepting the absolute-form request-target, which is
+// what a proxy forwards. Routing on the raw target 404s every proxied request.
+func TestParseRequestLine_AbsoluteForm(t *testing.T) {
+	tests := []struct {
+		name  string
+		uri   string
+		path  string
+		query []KV
+	}{
+		{name: "origin-form", uri: "/users/1", path: "/users/1"},
+		{name: "absolute-form", uri: "http://example.com/users/1", path: "/users/1"},
+		{name: "absolute-form https", uri: "https://example.com/users/1", path: "/users/1"},
+		{name: "absolute-form with port", uri: "http://example.com:8080/users/1", path: "/users/1"},
+		{
+			name:  "absolute-form with query",
+			uri:   "http://example.com/search?q=go&n=2",
+			path:  "/search",
+			query: []KV{{[]byte("q"), []byte("go")}, {[]byte("n"), []byte("2")}},
+		},
+		{name: "absolute-form with no path", uri: "http://example.com", path: "/"},
+		// Asterisk-form is neither origin- nor absolute-form; it passes through
+		// untouched and falls to the OPTIONS handling in serve().
+		{name: "asterisk-form passes through", uri: "*", path: "*"},
+		{
+			name:  "origin-form is not mistaken for an authority",
+			uri:   "/redirect?to=http://example.com/x",
+			path:  "/redirect",
+			query: []KV{{[]byte("to"), []byte("http://example.com/x")}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := bufio.NewReader(bytes.NewBufferString("GET " + tt.uri + " HTTP/1.1\r\nHost: example.com\r\n\r\n"))
+			c := &Context{}
+			if res := parseRequest(r, c); res != parseOK {
+				t.Fatalf("parseRequest = %d, want parseOK", res)
+			}
+			if string(c.path) != tt.path {
+				t.Errorf("path = %q, want %q", c.path, tt.path)
+			}
+			if len(c.query) != len(tt.query) {
+				t.Fatalf("query = %v, want %v", c.query, tt.query)
+			}
+			for i, kv := range tt.query {
+				if !bytes.Equal(c.query[i].K, kv.K) || !bytes.Equal(c.query[i].V, kv.V) {
+					t.Errorf("query[%d] = %s=%s, want %s=%s", i, c.query[i].K, c.query[i].V, kv.K, kv.V)
+				}
+			}
+		})
+	}
+}
+
+// RFC 7231 §5.1.1: only 100-continue is defined, and HTTP/1.0 has no interim
+// responses so the field is ignored there.
+func TestExpectation(t *testing.T) {
+	expect := func(values ...string) []KV {
+		kvs := make([]KV, 0, len(values))
+		for _, v := range values {
+			kvs = append(kvs, KV{K: []byte("expect"), V: []byte(v)})
+		}
+		return kvs
+	}
+
+	tests := []struct {
+		name    string
+		minor   int
+		headers []KV
+		want    parseResult
+	}{
+		{name: "no Expect", minor: 1, headers: nil, want: parseOK},
+		{name: "100-continue", minor: 1, headers: expect("100-continue"), want: parseContinue},
+		{name: "case-insensitive", minor: 1, headers: expect("100-Continue"), want: parseContinue},
+		{name: "padded", minor: 1, headers: expect("  100-continue "), want: parseContinue},
+		{name: "unknown expectation", minor: 1, headers: expect("the-impossible"), want: parseBadExpect},
+		{name: "one known one unknown", minor: 1, headers: expect("100-continue", "nope"), want: parseBadExpect},
+		{name: "HTTP/1.0 ignores it", minor: 0, headers: expect("100-continue"), want: parseOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Context{header: tt.headers, minorVersion: tt.minor}
+			if got := expectation(c); got != tt.want {
+				t.Errorf("expectation() = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
