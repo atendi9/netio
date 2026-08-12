@@ -27,7 +27,7 @@ const AllowAll string = "*"
 func DefaultConfig() Config {
 	return Config{
 		AllowOrigins: []string{AllowAll},
-		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
+		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "QUERY"},
 	}
 }
 
@@ -35,7 +35,7 @@ func resolveAllowedMethods(methods []string) string {
 	if joined := strings.Join(methods, ", "); joined != "" {
 		return joined
 	}
-	return "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
+	return "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, QUERY"
 }
 
 // normalizeList flattens comma-joined entries and drops blanks. Config values

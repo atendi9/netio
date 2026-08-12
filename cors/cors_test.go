@@ -206,7 +206,7 @@ func TestPreflightAllowedMethodsDefault(t *testing.T) {
 
 	res := preflight(t, url, "https://any.com", "GET", "")
 
-	assertHeader(t, res, "Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS")
+	assertHeader(t, res, "Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, QUERY")
 }
 
 func TestPreflightAllowedMethodsCustom(t *testing.T) {
