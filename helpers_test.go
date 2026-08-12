@@ -38,3 +38,28 @@ type errorReader struct{}
 
 func (e *errorReader) Read(p []byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 func (e *errorReader) Close() error               { return nil }
+
+// failAfterNWrites is a net.Conn whose Write starts failing once n writes have
+// succeeded, standing in for a peer that disappears mid-response.
+type failAfterNWrites struct {
+	fakeConn
+	n int
+}
+
+func (f *failAfterNWrites) Write(b []byte) (int, error) {
+	if f.n <= 0 {
+		return 0, io.ErrClosedPipe
+	}
+	f.n--
+	return len(b), nil
+}
+
+// readOnlyConn replays a canned request and fails every write, standing in for
+// a peer that hung up before the server could answer.
+type readOnlyConn struct {
+	fakeConn
+	r io.Reader
+}
+
+func (c *readOnlyConn) Read(b []byte) (int, error)  { return c.r.Read(b) }
+func (c *readOnlyConn) Write(b []byte) (int, error) { return 0, io.ErrClosedPipe }
