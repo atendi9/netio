@@ -397,6 +397,13 @@ func (c *Context) finalizeNoBody() {
 	c.SendStatus(http.StatusNoContent)
 }
 
+// Logger returns the app-configured logger, falling back to a default one when
+// the Context was built without an App. Never nil, so middlewares outside this
+// package can report diagnostics through the same sink as the framework.
+func (c *Context) Logger() Logger {
+	return c.responseLogger()
+}
+
 // responseLogger returns the logger used for response logging, reusing the
 // app-configured logger when available and falling back to a default one.
 func (c *Context) responseLogger() Logger {
