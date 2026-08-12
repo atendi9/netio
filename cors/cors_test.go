@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -130,7 +131,7 @@ func TestAllowAllOriginsWithoutCredentials(t *testing.T) {
 func TestAllowAllOriginsWithCredentials(t *testing.T) {
 	origin := "https://any.com"
 	url := startServer(t, cors.Config{
-		AllowOrigins:   []string{"*"},
+		AllowOrigins:     []string{"*"},
 		AllowCredentials: true,
 	})
 
@@ -168,7 +169,7 @@ func TestVarySetOnlyForAllowedOrigin(t *testing.T) {
 
 func TestExposeHeadersEmitted(t *testing.T) {
 	url := startServer(t, cors.Config{
-		AllowOrigins: []string{"*"},
+		AllowOrigins:  []string{"*"},
 		ExposeHeaders: []string{"X-Request-ID", "X-Total-Count"},
 	})
 
@@ -223,7 +224,7 @@ func TestPreflightAllowedMethodsCustom(t *testing.T) {
 func TestPreflightMaxAgeEmitted(t *testing.T) {
 	url := startServer(t, cors.Config{
 		AllowOrigins: []string{"*"},
-		MaxAge:  3600,
+		MaxAge:       3600,
 	})
 
 	res := preflight(t, url, "https://any.com", "GET", "")
@@ -234,7 +235,7 @@ func TestPreflightMaxAgeEmitted(t *testing.T) {
 func TestPreflightMaxAgeNotEmittedWhenZero(t *testing.T) {
 	url := startServer(t, cors.Config{
 		AllowOrigins: []string{"*"},
-		MaxAge:  0,
+		MaxAge:       0,
 	})
 
 	res := preflight(t, url, "https://any.com", "GET", "")
@@ -480,4 +481,19 @@ func setupApp(config cors.Config) *netio.App {
 	})
 
 	return app
+}
+
+// DefaultConfig has to advertise every method the router registers, QUERY
+// included, or a preflight for one of them is rejected out of the box.
+func TestDefaultConfig(t *testing.T) {
+	cfg := cors.DefaultConfig()
+
+	if len(cfg.AllowOrigins) != 1 || cfg.AllowOrigins[0] != cors.AllowAll {
+		t.Errorf("AllowOrigins = %v, want [%s]", cfg.AllowOrigins, cors.AllowAll)
+	}
+	for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "QUERY"} {
+		if !slices.Contains(cfg.AllowMethods, method) {
+			t.Errorf("AllowMethods = %v, missing %s", cfg.AllowMethods, method)
+		}
+	}
 }
