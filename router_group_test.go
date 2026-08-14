@@ -38,7 +38,7 @@ func TestGroup_Execution(t *testing.T) {
 	ctx := &Context{}
 	ctx.reset()
 	ctx.conn = server
-	ctx.handlers = h
+	ctx.handlers = h.handlers
 
 	done := make(chan struct{})
 
@@ -216,7 +216,7 @@ func TestGroup_RootPathRunsMiddlewares(t *testing.T) {
 
 	ctx := &Context{}
 	ctx.reset()
-	ctx.handlers = h
+	ctx.handlers = h.handlers
 	ctx.Next()
 
 	if len(order) != 2 || order[0] != "mw" || order[1] != "handler" {

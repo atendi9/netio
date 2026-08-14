@@ -25,7 +25,7 @@ func TestGroup_Get(t *testing.T) {
 	ctx := &Context{}
 	ctx.reset()
 	ctx.conn = server
-	ctx.handlers = h
+	ctx.handlers = h.handlers
 
 	done := make(chan struct{})
 	go func() {

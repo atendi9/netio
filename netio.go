@@ -187,27 +187,27 @@ func (a *App) Use(h Handler) {
 }
 
 func (a *App) GET(path string, h ...Handler) {
-	a.root.addMethod("GET", split(path), h)
+	a.root.addMethod("GET", routePattern(path), split(path), h)
 	a.registerOptions(path)
 }
 
 func (a *App) POST(path string, h ...Handler) {
-	a.root.addMethod("POST", split(path), h)
+	a.root.addMethod("POST", routePattern(path), split(path), h)
 	a.registerOptions(path)
 }
 
 func (a *App) PUT(path string, h ...Handler) {
-	a.root.addMethod("PUT", split(path), h)
+	a.root.addMethod("PUT", routePattern(path), split(path), h)
 	a.registerOptions(path)
 }
 
 func (a *App) DELETE(path string, h ...Handler) {
-	a.root.addMethod("DELETE", split(path), h)
+	a.root.addMethod("DELETE", routePattern(path), split(path), h)
 	a.registerOptions(path)
 }
 
 func (a *App) PATCH(path string, h ...Handler) {
-	a.root.addMethod("PATCH", split(path), h)
+	a.root.addMethod("PATCH", routePattern(path), split(path), h)
 	a.registerOptions(path)
 }
 
@@ -217,7 +217,7 @@ func (a *App) PATCH(path string, h ...Handler) {
 // its body suppressed. Register explicitly only to answer HEAD differently —
 // to skip expensive work a GET would do, say.
 func (a *App) HEAD(path string, h ...Handler) {
-	a.root.addMethod("HEAD", split(path), h)
+	a.root.addMethod("HEAD", routePattern(path), split(path), h)
 	a.registerOptions(path)
 }
 
@@ -237,7 +237,7 @@ func (a *App) QUERY(path string, h ...Handler) {
 // through here so it can place the guard after its own middlewares instead of
 // ahead of them.
 func (a *App) queryRoute(path string, handlers []Handler) {
-	a.root.addMethod("QUERY", split(path), handlers)
+	a.root.addMethod("QUERY", routePattern(path), split(path), handlers)
 	a.registerOptions(path)
 }
 
@@ -261,7 +261,7 @@ func requireContentType(c *Context) {
 }
 
 func (a *App) registerOptions(path string) {
-	a.root.addMethod("OPTIONS", split(path), []Handler{
+	a.root.addMethod("OPTIONS", routePattern(path), split(path), []Handler{
 		func(c *Context) {
 			c.SendStatus(http.StatusNoContent)
 		},
@@ -338,11 +338,11 @@ func (a *App) setListener(ln net.Listener) bool {
 // the body, so every GET route answers HEAD for free — a server that 404s HEAD
 // breaks health checks and link checkers for no reason. The caller suppresses
 // the body; only the routing is decided here.
-func (a *App) lookup(method string, path []byte, params *[]KV) ([]Handler, bool) {
+func (a *App) lookup(method string, path []byte, params *[]KV) (*route, bool) {
 	segments := splitBytes(path)
 
-	if h, ok := a.root.findMethod(method, segments, params); ok {
-		return h, true
+	if r, ok := a.root.findMethod(method, segments, params); ok {
+		return r, true
 	}
 	if method != http.MethodHead {
 		return nil, false
@@ -526,13 +526,14 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	params := make([]KV, 0, 8)
-	h, ok := a.lookup(r.Method, ctx.path, &params)
+	matched, ok := a.lookup(r.Method, ctx.path, &params)
 
 	ctx.params = params
 	ctx.handlers = append([]Handler{}, a.mw...)
 
 	if ok {
-		ctx.handlers = append(ctx.handlers, h...)
+		ctx.route = matched.pattern
+		ctx.handlers = append(ctx.handlers, matched.handlers...)
 	} else if r.Method == "OPTIONS" {
 		// Appended to the chain rather than answered inline: returning here
 		// would skip a.mw, so a CORS middleware would never see the preflight
@@ -612,13 +613,14 @@ func (a *App) serve(conn net.Conn) {
 		}
 
 		params := make([]KV, 0, 8)
-		h, ok := a.lookup(ctx.Method(), ctx.path, &params)
+		matched, ok := a.lookup(ctx.Method(), ctx.path, &params)
 
 		ctx.params = params
 		ctx.handlers = append([]Handler{}, a.mw...)
 
 		if ok {
-			ctx.handlers = append(ctx.handlers, h...)
+			ctx.route = matched.pattern
+			ctx.handlers = append(ctx.handlers, matched.handlers...)
 		} else if ctx.Method() == "OPTIONS" {
 			ctx.handlers = append(ctx.handlers, func(c *Context) {
 				c.SendStatus(http.StatusNoContent)

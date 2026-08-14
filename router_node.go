@@ -7,16 +7,26 @@ type node struct {
 	children []*node
 	param    bool
 	key      []byte
-	handlers map[string][]Handler
+	handlers map[string]*route
 }
 
-func (n *node) addMethod(method string, path [][]byte, h []Handler) {
+// route is the handler chain registered for one method on a node, kept
+// together with the pattern it was registered under. A matched request can then
+// name the route it hit: the concrete path carries parameter values, so keying
+// a metric or a log line by it lets a client mint an unbounded number of
+// distinct labels just by varying an id.
+type route struct {
+	handlers []Handler
+	pattern  string
+}
+
+func (n *node) addMethod(method, pattern string, path [][]byte, h []Handler) {
 	if n.handlers == nil {
-		n.handlers = make(map[string][]Handler)
+		n.handlers = make(map[string]*route)
 	}
 
 	if len(path) == 0 {
-		n.handlers[method] = h
+		n.handlers[method] = &route{handlers: h, pattern: pattern}
 		return
 	}
 
@@ -25,7 +35,7 @@ func (n *node) addMethod(method string, path [][]byte, h []Handler) {
 
 	for _, c := range n.children {
 		if bytes.Equal(c.part, part) {
-			c.addMethod(method, path[1:], h)
+			c.addMethod(method, pattern, path[1:], h)
 			return
 		}
 	}
@@ -34,7 +44,7 @@ func (n *node) addMethod(method string, path [][]byte, h []Handler) {
 	if isParam {
 		for _, c := range n.children {
 			if c.param {
-				c.addMethod(method, path[1:], h)
+				c.addMethod(method, pattern, path[1:], h)
 				return
 			}
 		}
@@ -49,13 +59,13 @@ func (n *node) addMethod(method string, path [][]byte, h []Handler) {
 	}
 
 	n.children = append(n.children, child)
-	child.addMethod(method, path[1:], h)
+	child.addMethod(method, pattern, path[1:], h)
 }
 
-func (n *node) findMethod(method string, path [][]byte, params *[]KV) ([]Handler, bool) {
+func (n *node) findMethod(method string, path [][]byte, params *[]KV) (*route, bool) {
 	if len(path) == 0 {
-		h, ok := n.handlers[method]
-		return h, ok
+		r, ok := n.handlers[method]
+		return r, ok
 	}
 
 	// First try the exact static child. If the recursive descent dead-ends,
@@ -64,8 +74,8 @@ func (n *node) findMethod(method string, path [][]byte, params *[]KV) ([]Handler
 	// an otherwise-matching param route registered at the same level.
 	for _, c := range n.children {
 		if !c.param && bytes.Equal(c.part, path[0]) {
-			if h, ok := c.findMethod(method, path[1:], params); ok {
-				return h, true
+			if r, ok := c.findMethod(method, path[1:], params); ok {
+				return r, true
 			}
 			break
 		}
@@ -76,8 +86,8 @@ func (n *node) findMethod(method string, path [][]byte, params *[]KV) ([]Handler
 		if c.param {
 			mark := len(*params)
 			*params = append(*params, KV{c.key, path[0]})
-			if h, ok := c.findMethod(method, path[1:], params); ok {
-				return h, true
+			if r, ok := c.findMethod(method, path[1:], params); ok {
+				return r, true
 			}
 			*params = (*params)[:mark]
 		}

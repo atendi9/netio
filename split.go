@@ -4,6 +4,16 @@ func split(p string) [][]byte {
 	return splitBytes([]byte(p))
 }
 
+// routePattern reduces a registered path to the shape the router matches on, so
+// the pattern a request reports having matched is the same string whether it
+// was registered as "/v1/budget" or "/v1/budget/".
+func routePattern(p string) string {
+	for len(p) > 1 && p[len(p)-1] == '/' {
+		p = p[:len(p)-1]
+	}
+	return p
+}
+
 func splitBytes(p []byte) [][]byte {
 	// A trailing slash addresses no extra segment: "/v1/" and "/v1" name the
 	// same resource. Trimming it before splitting is what keeps registration and

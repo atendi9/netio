@@ -1523,3 +1523,99 @@ func TestServe_MixedCaseHeaderReachesHandler(t *testing.T) {
 		t.Errorf("handler did not receive the ApiKey header:\n%s", resp)
 	}
 }
+
+// Route reports the pattern a request matched, not the path it arrived on: a
+// metric or log key built from the path grows one series per parameter value,
+// which any client can inflate at will.
+func TestContext_RouteReportsTheMatchedPattern(t *testing.T) {
+	tests := []struct {
+		name     string
+		register func(*App)
+		method   string
+		path     string
+		want     string
+	}{
+		{
+			name:     "param route",
+			register: func(a *App) { a.GET("/v1/budget/:id", func(c *Context) {}) },
+			method:   http.MethodGet,
+			path:     "/v1/budget/42",
+			want:     "/v1/budget/:id",
+		},
+		{
+			name:     "static route",
+			register: func(a *App) { a.GET("/healthz", func(c *Context) {}) },
+			method:   http.MethodGet,
+			path:     "/healthz",
+			want:     "/healthz",
+		},
+		{
+			name:     "group route",
+			register: func(a *App) { a.Group("/v1/budget").Get("/:id/customer", func(c *Context) {}) },
+			method:   http.MethodGet,
+			path:     "/v1/budget/42/customer",
+			want:     "/v1/budget/:id/customer",
+		},
+		{
+			// Registered with a trailing slash, matched without one: the
+			// pattern reported is the single normalized form either way.
+			name:     "route registered with a trailing slash",
+			register: func(a *App) { a.Group("/v1").Get("/", func(c *Context) {}) },
+			method:   http.MethodGet,
+			path:     "/v1",
+			want:     "/v1",
+		},
+		{
+			// HEAD falls back to the GET handler, and reports the pattern that
+			// handler was registered under.
+			name:     "head falling back to get",
+			register: func(a *App) { a.GET("/v1/file/:id", func(c *Context) {}) },
+			method:   http.MethodHead,
+			path:     "/v1/file/7",
+			want:     "/v1/file/:id",
+		},
+		{
+			name:     "unmatched request",
+			register: func(a *App) { a.GET("/known", func(c *Context) {}) },
+			method:   http.MethodGet,
+			path:     "/nothing/here",
+			want:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app, _ := New(AppConfig{Port: "0"})
+			tt.register(app)
+
+			var got string
+			app.Use(func(c *Context) {
+				c.Next()
+				got = c.Route()
+			})
+
+			app.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(tt.method, tt.path, nil))
+
+			if got != tt.want {
+				t.Errorf("Route() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Same guarantee on netio's own listener, not just when mounted on net/http.
+func TestContext_RouteOverARawConnection(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0"})
+
+	var got string
+	app.GET("/v1/budget/:id", func(c *Context) {
+		got = c.Route()
+		c.Send([]byte("ok"))
+	})
+
+	serveRequest(t, app, "GET /v1/budget/42 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+
+	if got != "/v1/budget/:id" {
+		t.Errorf("Route() = %q, want %q", got, "/v1/budget/:id")
+	}
+}

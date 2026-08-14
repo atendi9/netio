@@ -7,22 +7,22 @@ import (
 
 func TestNode_StaticPath(t *testing.T) {
 	root := &node{}
-	root.addMethod("GET", [][]byte{[]byte("home")}, []Handler{func(c *Context) {}})
+	root.addMethod("GET", "", [][]byte{[]byte("home")}, []Handler{func(c *Context) {}})
 
 	params := []KV{}
 	handlers, ok := root.findMethod("GET", [][]byte{[]byte("home")}, &params)
-	if !ok || len(handlers) != 1 || len(params) != 0 {
+	if !ok || len(handlers.handlers) != 1 || len(params) != 0 {
 		t.Errorf("expected handler with no params, got ok=%v params=%v", ok, params)
 	}
 }
 
 func TestNode_ParamPath(t *testing.T) {
 	root := &node{}
-	root.addMethod("GET", [][]byte{[]byte("user"), []byte(":id")}, []Handler{func(c *Context) {}})
+	root.addMethod("GET", "", [][]byte{[]byte("user"), []byte(":id")}, []Handler{func(c *Context) {}})
 
 	params := []KV{}
 	handlers, ok := root.findMethod("GET", [][]byte{[]byte("user"), []byte("42")}, &params)
-	if !ok || len(handlers) != 1 {
+	if !ok || len(handlers.handlers) != 1 {
 		t.Fatal("expected handler found")
 	}
 	if len(params) != 1 || !bytes.Equal(params[0].K, []byte("id")) || !bytes.Equal(params[0].V, []byte("42")) {
@@ -32,7 +32,7 @@ func TestNode_ParamPath(t *testing.T) {
 
 func TestNode_NotFound(t *testing.T) {
 	root := &node{}
-	root.addMethod("GET", [][]byte{[]byte("home")}, []Handler{func(c *Context) {}})
+	root.addMethod("GET", "", [][]byte{[]byte("home")}, []Handler{func(c *Context) {}})
 
 	params := []KV{}
 	h, ok := root.findMethod("GET", [][]byte{[]byte("unknown")}, &params)
@@ -43,8 +43,8 @@ func TestNode_NotFound(t *testing.T) {
 
 func TestNode_StaticPreferredOverParam(t *testing.T) {
 	root := &node{}
-	root.addMethod("GET", [][]byte{[]byte("users"), []byte(":id")}, []Handler{func(c *Context) {}})
-	root.addMethod("GET", [][]byte{[]byte("users"), []byte("count")}, []Handler{func(c *Context) {}})
+	root.addMethod("GET", "", [][]byte{[]byte("users"), []byte(":id")}, []Handler{func(c *Context) {}})
+	root.addMethod("GET", "", [][]byte{[]byte("users"), []byte("count")}, []Handler{func(c *Context) {}})
 
 	// Static "count" should match, not param ":id"
 	params := []KV{}
@@ -70,8 +70,8 @@ func TestNode_StaticPreferredOverParam(t *testing.T) {
 func TestNode_ParamReuseOnAdd(t *testing.T) {
 	root := &node{}
 	// Register two different param routes at the same level — should reuse the param node
-	root.addMethod("GET", [][]byte{[]byte("items"), []byte(":id")}, []Handler{func(c *Context) {}})
-	root.addMethod("POST", [][]byte{[]byte("items"), []byte(":name")}, []Handler{func(c *Context) {}})
+	root.addMethod("GET", "", [][]byte{[]byte("items"), []byte(":id")}, []Handler{func(c *Context) {}})
+	root.addMethod("POST", "", [][]byte{[]byte("items"), []byte(":name")}, []Handler{func(c *Context) {}})
 
 	// Should have only one child under "items" (reused param node)
 	itemsNode := root.children[0]
@@ -86,8 +86,8 @@ func TestNode_ParamReuseOnAdd(t *testing.T) {
 func TestNode_BacktrackToParamSibling(t *testing.T) {
 	root := &node{}
 	// Register the static branch first so it is tried first during lookup.
-	root.addMethod("GET", [][]byte{[]byte("users"), []byte("new")}, []Handler{func(c *Context) {}})
-	root.addMethod("GET", [][]byte{[]byte("users"), []byte(":id"), []byte("posts")}, []Handler{func(c *Context) {}})
+	root.addMethod("GET", "", [][]byte{[]byte("users"), []byte("new")}, []Handler{func(c *Context) {}})
+	root.addMethod("GET", "", [][]byte{[]byte("users"), []byte(":id"), []byte("posts")}, []Handler{func(c *Context) {}})
 
 	// "users/new" matches the static segment but dead-ends (no "posts" child);
 	// the param route "users/:id/posts" must still be reachable.
@@ -114,7 +114,7 @@ func TestNode_BacktrackToParamSibling(t *testing.T) {
 // branch's failed sibling attempts do not leak into the final result.
 func TestNode_BacktrackTrimsParams(t *testing.T) {
 	root := &node{}
-	root.addMethod("GET", [][]byte{[]byte("a"), []byte(":x"), []byte("b")}, []Handler{func(c *Context) {}})
+	root.addMethod("GET", "", [][]byte{[]byte("a"), []byte(":x"), []byte("b")}, []Handler{func(c *Context) {}})
 
 	// No route matches a/v/c — params must come back empty, not carry ":x".
 	params := []KV{}
@@ -128,12 +128,12 @@ func TestNode_BacktrackTrimsParams(t *testing.T) {
 
 func TestNode_DifferentMethodSamePath(t *testing.T) {
 	root := &node{}
-	root.addMethod("GET", [][]byte{[]byte("user"), []byte(":id")}, []Handler{func(c *Context) {}})
-	root.addMethod("POST", [][]byte{[]byte("user"), []byte(":id")}, []Handler{func(c *Context) {}})
+	root.addMethod("GET", "", [][]byte{[]byte("user"), []byte(":id")}, []Handler{func(c *Context) {}})
+	root.addMethod("POST", "", [][]byte{[]byte("user"), []byte(":id")}, []Handler{func(c *Context) {}})
 
 	params := []KV{}
 	handlers, ok := root.findMethod("POST", [][]byte{[]byte("user"), []byte("42")}, &params)
-	if !ok || len(handlers) != 1 {
+	if !ok || len(handlers.handlers) != 1 {
 		t.Fatal("expected POST handler found")
 	}
 	if len(params) != 1 || !bytes.Equal(params[0].K, []byte("id")) || !bytes.Equal(params[0].V, []byte("42")) {

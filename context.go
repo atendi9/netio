@@ -25,6 +25,11 @@ type Context struct {
 	method []byte
 	path   []byte
 
+	// route is the pattern the request matched ("/v1/budget/:id"), empty when
+	// no route did. It is what a metric or a log line should be keyed by: the
+	// path itself carries parameter values a client chooses freely.
+	route string
+
 	// minorVersion is the minor of the request's HTTP/1.x version. It decides
 	// the default connection persistence: 0 (HTTP/1.0) closes unless the client
 	// asked for keep-alive, 1 and above stay open unless it asked to close.
@@ -108,6 +113,7 @@ func (c *Context) Abort() { c.aborted = true }
 func (c *Context) reset() {
 	c.method = c.method[:0]
 	c.path = c.path[:0]
+	c.route = ""
 	c.minorVersion = 0
 	c.params = c.params[:0]
 	c.query = c.query[:0]
@@ -149,6 +155,16 @@ func (c *Context) Header(key string) string {
 
 func (c *Context) Method() string {
 	return string(c.method)
+}
+
+// Route returns the pattern this request matched — "/v1/budget/:id", not
+// "/v1/budget/42" — or an empty string when no route matched.
+//
+// Use it wherever a request has to be labelled: a metric or a log key built
+// from Path grows one series per parameter value, so any client can inflate it
+// without bound just by varying an id.
+func (c *Context) Route() string {
+	return c.route
 }
 
 func (c *Context) Path(defaultValue ...string) string {
