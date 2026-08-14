@@ -462,9 +462,11 @@ func (a *App) ServeFiles(endpoint, dirPath string) error {
 	absDirPath = filepath.Clean(absDirPath) + string(filepath.Separator)
 
 	a.GET(endpoint+":filename", func(c *Context) {
-		filename := c.Param("filename")
-
-		decodedFilename, err := url.PathUnescape(filename)
+		// Decoded from the raw segment rather than through Param, which hands
+		// back a malformed escape verbatim: here a broken escape is a bad
+		// request, and answering 404 instead would let a client probe the
+		// directory with escapes the server never resolved.
+		decodedFilename, err := url.PathUnescape(c.rawParam("filename"))
 		if err != nil {
 			c.SendStatus(http.StatusBadRequest)
 			return

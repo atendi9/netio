@@ -304,16 +304,46 @@ func setFieldValue(f reflect.Value, val string) error {
 	return nil
 }
 
+// Params returns a path parameter, percent-decoded.
+//
+// The value arrives escaped — a browser cannot put "/" or a space in a segment
+// any other way — so returning the raw segment made every handler that looks a
+// record up by name or e-mail search for a string with "%20" still in it.
+// A value whose escaping is malformed is returned verbatim rather than dropped.
 func (c *Context) Params(name string, defaultValue ...string) string {
 	for _, kv := range c.params {
 		if string(kv.K) == name {
-			return string(kv.V)
+			return unescapePath(string(kv.V))
 		}
 	}
 	if len(defaultValue) > 0 {
 		return defaultValue[0]
 	}
 	return ""
+}
+
+// rawParam returns a path parameter exactly as it appeared in the request,
+// escapes and all. Params is what handlers want; this is for the rare caller
+// that must tell "the escape is malformed" apart from "the decoded value
+// happens to contain a percent sign".
+func (c *Context) rawParam(name string) string {
+	for _, kv := range c.params {
+		if string(kv.K) == name {
+			return string(kv.V)
+		}
+	}
+	return ""
+}
+
+// unescapePath percent-decodes a path segment. PathUnescape, not
+// QueryUnescape: in a path a "+" is a literal plus, and only the query string
+// spells a space that way.
+func unescapePath(v string) string {
+	decoded, err := url.PathUnescape(v)
+	if err != nil {
+		return v
+	}
+	return decoded
 }
 
 func (c *Context) Status(statusCode int) *Context {
@@ -375,7 +405,7 @@ func (c *Context) SendFileFromReader(r io.ReadCloser) {
 func (c *Context) ParamsParser(v any) error {
 	values := make(url.Values)
 	for _, kv := range c.params {
-		values.Add(string(kv.K), string(kv.V))
+		values.Add(string(kv.K), unescapePath(string(kv.V)))
 	}
 	return mapToStruct(values, "param", v)
 }

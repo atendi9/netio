@@ -781,3 +781,61 @@ func TestContext_SendFileFromReader_WriteErrors(t *testing.T) {
 		})
 	}
 }
+
+// A path parameter arrives percent-escaped — a browser cannot put a space or a
+// slash in a segment any other way — so a handler looking a record up by name
+// or e-mail was searching for a string with "%20" still in it.
+func TestContext_ParamsArePercentDecoded(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"space", "Minha%20Empresa", "Minha Empresa"},
+		{"plus is literal in a path", "a+b", "a+b"},
+		{"encoded at sign", "test%40test.com", "test@test.com"},
+		{"nothing to decode", "plain", "plain"},
+		{"encoded percent", "100%25", "100%"},
+		{"malformed escape is kept verbatim", "%zz", "%zz"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Context{params: []KV{{K: []byte("name"), V: []byte(tt.raw)}}}
+
+			if got := c.Params("name"); got != tt.want {
+				t.Errorf("Params(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+			if got := c.Param("name"); got != tt.want {
+				t.Errorf("Param(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+// The same decoding through the struct binder.
+func TestContext_ParamsParserDecodes(t *testing.T) {
+	c := &Context{params: []KV{{K: []byte("gmail"), V: []byte("test%40test.com")}}}
+
+	var params struct {
+		Gmail string `param:"gmail"`
+	}
+	if err := c.ParamsParser(&params); err != nil {
+		t.Fatalf("ParamsParser: %v", err)
+	}
+	if params.Gmail != "test@test.com" {
+		t.Errorf("Gmail = %q, want %q", params.Gmail, "test@test.com")
+	}
+}
+
+// A missing parameter still falls back to the default rather than to "".
+func TestContext_ParamsDefaultIsUnaffectedByDecoding(t *testing.T) {
+	c := &Context{}
+
+	if got := c.Params("missing", "fallback"); got != "fallback" {
+		t.Errorf("Params default = %q, want %q", got, "fallback")
+	}
+	if got := c.Params("missing"); got != "" {
+		t.Errorf("Params with no default = %q, want empty", got)
+	}
+}
