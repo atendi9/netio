@@ -1,6 +1,7 @@
 package netio
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1652,5 +1654,85 @@ func TestServeHTTP_ExplicitHostHeaderWins(t *testing.T) {
 
 	if got != "api.atendi9.com.br" {
 		t.Errorf(`Header("Host") = %q, want the header value %q`, got, "api.atendi9.com.br")
+	}
+}
+
+// A body past the limit is refused, not truncated. Stopping the read at the
+// limit handed the handler a shortened body the client never sent — an upload
+// stored corrupt and answered 200 — while the raw-socket path already said 413.
+func TestServeHTTP_BodyOverTheLimitIsRefused(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0", MaxBodySize: "10 B"})
+
+	var handlerRan bool
+	app.POST("/upload", func(c *Context) {
+		handlerRan = true
+		c.Send(c.Body())
+	})
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader(strings.Repeat("x", 50)))
+	app.ServeHTTP(res, req)
+
+	if res.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", res.Code)
+	}
+	if handlerRan {
+		t.Error("the handler ran on a body the server refused to read")
+	}
+}
+
+// A body exactly at the limit still goes through: the extra byte read is only
+// there to detect the overflow.
+func TestServeHTTP_BodyAtTheLimitIsAccepted(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0", MaxBodySize: "10 B"})
+	app.POST("/upload", func(c *Context) { c.Send(c.Body()) })
+
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader(strings.Repeat("x", 10)))
+	app.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", res.Code)
+	}
+	if body := res.Body.String(); body != strings.Repeat("x", 10) {
+		t.Errorf("body = %q, want the 10 bytes sent", body)
+	}
+}
+
+// Multipart uploads work through the net/http mount: the parser rebuilds the
+// form from the buffered body, so the file the client sent arrives whole.
+func TestServeHTTP_FormFile(t *testing.T) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "nota.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("conteudo-do-arquivo")); err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+
+	app, _ := New(AppConfig{Port: "0"})
+
+	var (
+		gotName string
+		gotSize int64
+	)
+	app.POST("/upload", func(c *Context) {
+		fh, err := c.FormFile("file")
+		if err != nil {
+			t.Errorf("FormFile: %v", err)
+			return
+		}
+		gotName, gotSize = fh.Filename, fh.Size
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/upload", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	app.ServeHTTP(httptest.NewRecorder(), req)
+
+	if gotName != "nota.pdf" || gotSize != int64(len("conteudo-do-arquivo")) {
+		t.Errorf("FormFile = %q (%d bytes), want nota.pdf (%d bytes)", gotName, gotSize, len("conteudo-do-arquivo"))
 	}
 }

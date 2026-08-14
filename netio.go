@@ -544,9 +544,21 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ctx.header = append(ctx.header, KV{K: []byte("host"), V: []byte(r.Host)})
 	}
 	if r.Body != nil {
-		limitReader := io.LimitReader(r.Body, int64(a.maxBodySize))
+		// Read one byte past the limit so an oversized body can be told apart
+		// from one that lands exactly on it. Stopping at the limit instead
+		// truncated the request and handed the handler a body the client never
+		// sent — a corrupt upload stored as if it were complete, answered 200.
+		limitReader := io.LimitReader(r.Body, int64(a.maxBodySize)+1)
 		ctx.body, _ = io.ReadAll(limitReader)
 		r.Body.Close()
+
+		if a.maxBodySize > 0 && len(ctx.body) > a.maxBodySize {
+			// Answered here rather than through the handler chain, mirroring
+			// the raw-socket path: the request is unusable, and no middleware
+			// runs for a message this server refused to read.
+			ctx.SendStatus(http.StatusRequestEntityTooLarge)
+			return
+		}
 	}
 
 	if r.Method == http.MethodHead {
