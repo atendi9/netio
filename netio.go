@@ -515,6 +515,14 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ctx.header = append(ctx.header, KV{K: []byte(lk), V: []byte(v)})
 		}
 	}
+
+	// net/http lifts Host out of the header block into r.Host and leaves it out
+	// of r.Header, so a handler asking for it would read empty here while the
+	// same code works on netio's own listener. The request did carry the field;
+	// put it back.
+	if r.Host != "" && r.Header.Get("Host") == "" {
+		ctx.header = append(ctx.header, KV{K: []byte("host"), V: []byte(r.Host)})
+	}
 	if r.Body != nil {
 		limitReader := io.LimitReader(r.Body, int64(a.maxBodySize))
 		ctx.body, _ = io.ReadAll(limitReader)

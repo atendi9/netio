@@ -1619,3 +1619,38 @@ func TestContext_RouteOverARawConnection(t *testing.T) {
 		t.Errorf("Route() = %q, want %q", got, "/v1/budget/:id")
 	}
 }
+
+// net/http lifts Host out of the header block into Request.Host, so without the
+// app putting it back a handler mounted on net/http reads an empty Host while
+// the same code works on netio's own listener.
+func TestServeHTTP_HostHeaderIsReadable(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0"})
+
+	var got string
+	app.GET("/host", func(c *Context) { got = c.Header("Host") })
+
+	req := httptest.NewRequest(http.MethodGet, "/host", nil)
+	req.Host = "api.atendi9.com.br"
+	app.ServeHTTP(httptest.NewRecorder(), req)
+
+	if got != "api.atendi9.com.br" {
+		t.Errorf(`Header("Host") = %q, want %q`, got, "api.atendi9.com.br")
+	}
+}
+
+// A Host the client did send in the header block is not overwritten.
+func TestServeHTTP_ExplicitHostHeaderWins(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0"})
+
+	var got string
+	app.GET("/host", func(c *Context) { got = c.Header("Host") })
+
+	req := httptest.NewRequest(http.MethodGet, "/host", nil)
+	req.Host = "internal.lan"
+	req.Header.Set("Host", "api.atendi9.com.br")
+	app.ServeHTTP(httptest.NewRecorder(), req)
+
+	if got != "api.atendi9.com.br" {
+		t.Errorf(`Header("Host") = %q, want the header value %q`, got, "api.atendi9.com.br")
+	}
+}
