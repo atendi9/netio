@@ -5,6 +5,14 @@ func split(p string) [][]byte {
 }
 
 func splitBytes(p []byte) [][]byte {
+	// A trailing slash addresses no extra segment: "/v1/" and "/v1" name the
+	// same resource. Trimming it before splitting is what keeps registration and
+	// lookup on the same shape — otherwise a group registering Get("/") built
+	// "/v1/", whose empty last segment no request for "/v1" could ever match.
+	for len(p) > 1 && p[len(p)-1] == '/' {
+		p = p[:len(p)-1]
+	}
+
 	if len(p) <= 1 {
 		return nil
 	}

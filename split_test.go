@@ -26,9 +26,21 @@ func TestSplit(t *testing.T) {
 		assertEqual(t, want, got)
 	})
 
-	t.Run("trailing separator", func(t *testing.T) {
+	t.Run("trailing separator adds no segment", func(t *testing.T) {
 		got := split("ab/")
-		want := [][]byte{{'b'}, {}}
+		want := [][]byte{{'b'}}
+		assertEqual(t, want, got)
+	})
+
+	// A group registering Get("/") produces "/base/", which has to address the
+	// same node as "/base" or the route answers nothing at all.
+	t.Run("trailing separator matches the path without it", func(t *testing.T) {
+		assertEqual(t, split("/v1/dashboard"), split("/v1/dashboard/"))
+	})
+
+	t.Run("repeated trailing separators", func(t *testing.T) {
+		got := split("/v1//")
+		want := [][]byte{{'v', '1'}}
 		assertEqual(t, want, got)
 	})
 
@@ -80,9 +92,21 @@ func TestSplitBytes(t *testing.T) {
 
 	t.Run("trailing separator", func(t *testing.T) {
 		got := splitBytes([]byte{'a', 'b', '/'})
-		want := [][]byte{{'b'}, {}}
+		want := [][]byte{{'b'}}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("splitBytes(['a','b','/']) = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("slash only", func(t *testing.T) {
+		if got := splitBytes([]byte{'/'}); got != nil {
+			t.Errorf("splitBytes(['/']) = %v, want nil", got)
+		}
+	})
+
+	t.Run("root with repeated slashes", func(t *testing.T) {
+		if got := splitBytes([]byte("///")); got != nil {
+			t.Errorf(`splitBytes("///") = %v, want nil`, got)
 		}
 	})
 

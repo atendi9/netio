@@ -1,5 +1,7 @@
 package netio
 
+import "strings"
+
 // Router defines a contract for registering HTTP routes and creating route groups.
 //
 // A Router allows attaching handlers to specific HTTP methods and paths.
@@ -51,11 +53,24 @@ func (g *group) Use(middlewares ...Handler) {
 	g.middlewares = append(g.middlewares, middlewares...)
 }
 
+// join builds the full path of a route registered on the group. A route path of
+// "" or "/" addresses the group's own path, and the slash between base and path
+// is emitted exactly once: concatenating them raw turned Get("/") into "/v1/"
+// and a base ending in "/" into "/v1//users", neither of which the router could
+// match against an incoming "/v1" or "/v1/users".
 func (g *group) join(path string) string {
-	if path == "" {
-		return g.basePath
+	base := strings.TrimRight(g.basePath, "/")
+	path = strings.TrimRight(path, "/")
+
+	if path != "" && path[0] != '/' {
+		path = "/" + path
 	}
-	return g.basePath + path
+
+	if joined := base + path; joined != "" {
+		return joined
+	}
+
+	return "/"
 }
 
 func (g *group) chain(h []Handler) []Handler {

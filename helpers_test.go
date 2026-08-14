@@ -1,9 +1,12 @@
 package netio
 
 import (
+	"bytes"
 	"io"
 	"net"
 	"net/http/httptest"
+	"strings"
+	"testing"
 	"time"
 )
 
@@ -54,6 +57,17 @@ func (f *failAfterNWrites) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
+// replayConn replays a canned request and records everything the server writes
+// back, so a full round trip through serve can be asserted on without a socket.
+type replayConn struct {
+	fakeConn
+	r   io.Reader
+	out bytes.Buffer
+}
+
+func (c *replayConn) Read(b []byte) (int, error)  { return c.r.Read(b) }
+func (c *replayConn) Write(b []byte) (int, error) { return c.out.Write(b) }
+
 // readOnlyConn replays a canned request and fails every write, standing in for
 // a peer that hung up before the server could answer.
 type readOnlyConn struct {
@@ -63,3 +77,25 @@ type readOnlyConn struct {
 
 func (c *readOnlyConn) Read(b []byte) (int, error)  { return c.r.Read(b) }
 func (c *readOnlyConn) Write(b []byte) (int, error) { return 0, io.ErrClosedPipe }
+
+// serveRequest runs one canned request through serve and returns the raw
+// response, exercising the parser, the router and the writer together.
+func serveRequest(t *testing.T, app *App, raw string) string {
+	t.Helper()
+
+	conn := &replayConn{r: strings.NewReader(raw)}
+
+	done := make(chan struct{})
+	go func() {
+		app.serve(conn)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("serve did not return")
+	}
+
+	return conn.out.String()
+}
