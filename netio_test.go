@@ -1736,3 +1736,58 @@ func TestServeHTTP_FormFile(t *testing.T) {
 		t.Errorf("FormFile = %q (%d bytes), want nota.pdf (%d bytes)", gotName, gotSize, len("conteudo-do-arquivo"))
 	}
 }
+
+// net/http decodes the path before a handler ever sees it, so routing on
+// URL.Path let an escaped slash forge a segment boundary: a request naming one
+// segment reached a two-segment route. Routing on EscapedPath keeps the mount
+// agreeing with the raw-socket path, which never decodes before matching.
+func TestServeHTTP_EscapedSlashDoesNotForgeASegment(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0"})
+
+	var matched string
+	app.GET("/v1/budget/:id", func(c *Context) { matched = "one:" + c.Params("id") })
+	app.GET("/v1/budget/:a/:b", func(c *Context) { matched = "two:" + c.Params("a") + "|" + c.Params("b") })
+
+	app.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/budget/a%2Fb", nil))
+
+	if matched != "one:a/b" {
+		t.Errorf("matched %q, want the single-segment route with id=%q", matched, "a/b")
+	}
+}
+
+// The same request over netio's own listener, so neither path can drift from
+// the other.
+func TestServe_EscapedSlashDoesNotForgeASegment(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0"})
+
+	var matched string
+	app.GET("/v1/budget/:id", func(c *Context) {
+		matched = "one:" + c.Params("id")
+		c.Send([]byte("ok"))
+	})
+	app.GET("/v1/budget/:a/:b", func(c *Context) {
+		matched = "two"
+		c.Send([]byte("ok"))
+	})
+
+	serveRequest(t, app, "GET /v1/budget/a%2Fb HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+
+	if matched != "one:a/b" {
+		t.Errorf("matched %q, want the single-segment route with id=%q", matched, "a/b")
+	}
+}
+
+// A parameter is decoded exactly once through the net/http mount: "%2520" is an
+// escaped "%20", so it must arrive as "%20" and not as a space.
+func TestServeHTTP_ParamIsDecodedExactlyOnce(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0"})
+
+	var got string
+	app.GET("/v1/account/:name", func(c *Context) { got = c.Params("name") })
+
+	app.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/account/Minha%2520Empresa", nil))
+
+	if got != "Minha%20Empresa" {
+		t.Errorf(`Params("name") = %q, want %q`, got, "Minha%20Empresa")
+	}
+}

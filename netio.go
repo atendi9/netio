@@ -518,7 +518,12 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx.maxBodySize = a.maxBodySize
 
 	ctx.method = []byte(r.Method)
-	ctx.path = []byte(r.URL.Path)
+	// EscapedPath, not Path: net/http hands Path back already decoded, and
+	// routing on that let "%2F" forge a segment boundary — a request for one
+	// segment matched a two-segment route — while a parameter went through a
+	// second decode on the way to the handler. The raw-socket path never
+	// decodes before routing, and this keeps the two agreeing.
+	ctx.path = []byte(r.URL.EscapedPath())
 
 	// The raw-socket parser fills ctx.query from the request line; without the
 	// same step here, Context.Query always read empty when the app was mounted
