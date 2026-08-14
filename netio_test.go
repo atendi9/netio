@@ -1500,3 +1500,26 @@ func TestServe_Expect100Continue_WriteFails(t *testing.T) {
 		t.Fatal("serve kept going after the interim response failed to send")
 	}
 }
+
+// The client sends "ApiKey"; the parser lowercases it; the handler binds it with
+// a tag written `header:"apiKey"`. Matching the tag verbatim broke that last
+// step, and the handler saw an empty key on every authenticated request.
+func TestServe_MixedCaseHeaderReachesHandler(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0"})
+	app.Group("/v1").Get("/health", func(c *Context) {
+		var header struct {
+			ApiKey string `header:"apiKey"`
+		}
+		if err := c.ReqHeaderParser(&header); err != nil {
+			t.Errorf("ReqHeaderParser: %v", err)
+		}
+		c.Send([]byte(header.ApiKey + "|" + c.Header("apiKey")))
+	})
+
+	resp := serveRequest(t, app,
+		"GET /v1/health HTTP/1.1\r\nHost: x\r\nApiKey: secret\r\nConnection: close\r\n\r\n")
+
+	if !strings.Contains(resp, "secret|secret") {
+		t.Errorf("handler did not receive the ApiKey header:\n%s", resp)
+	}
+}

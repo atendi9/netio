@@ -124,6 +124,10 @@ func (c *Context) reset() {
 	c.isStdHTTP = false
 }
 
+// Headers returns every request header, keyed by lowercased field name — the
+// form the parser stores. A map cannot be case-insensitive, so a caller looking
+// a header up by a mixed-case name must lowercase it first; Header and
+// ReqHeaderParser do that themselves and are the safer choice.
 func (c *Context) Headers() map[string][]string {
 	h := make(map[string][]string, len(c.header))
 	for _, kv := range c.header {
@@ -207,6 +211,13 @@ var (
 )
 
 func mapToStruct(values url.Values, tag string, dst any) error {
+	return bindStruct(values.Get, tag, dst)
+}
+
+// bindStruct fills the fields of dst tagged tag with the value get returns for
+// each tag's key. Taking the lookup as a function is what lets header binding be
+// case-insensitive while param and query binding stay exact.
+func bindStruct(get func(key string) string, tag string, dst any) error {
 	v := reflect.ValueOf(dst)
 	if v.Kind() != reflect.Pointer || v.IsNil() {
 		return ErrDstMustBeAPointer
@@ -222,7 +233,7 @@ func mapToStruct(values url.Values, tag string, dst any) error {
 			continue
 		}
 
-		val := values.Get(key)
+		val := get(key)
 		if val == "" {
 			continue
 		}
@@ -353,12 +364,21 @@ func (c *Context) ParamsParser(v any) error {
 	return mapToStruct(values, "param", v)
 }
 
+// ReqHeaderParser fills the fields of v tagged `header` with the request's
+// header values.
+//
+// Lookup is case-insensitive, like Header: RFC 7230 §3.2 makes field names
+// case-insensitive, and the parser records them lowercased. Matching the tag
+// verbatim left a field tagged `header:"apiKey"` empty for a request that did
+// carry the header, which is indistinguishable from the client omitting it.
 func (c *Context) ReqHeaderParser(v any) error {
 	values := make(url.Values)
 	for _, kv := range c.header {
-		values.Add(string(kv.K), string(kv.V))
+		values.Add(strings.ToLower(string(kv.K)), string(kv.V))
 	}
-	return mapToStruct(values, "header", v)
+	return bindStruct(func(key string) string {
+		return values.Get(strings.ToLower(key))
+	}, "header", v)
 }
 
 func (c *Context) IP() string {

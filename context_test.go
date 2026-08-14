@@ -1,8 +1,10 @@
 package netio
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net"
@@ -284,6 +286,103 @@ func TestContext_ReqHeaderParser(t *testing.T) {
 	}
 	if err := c.ReqHeaderParser(&h); err != nil || h.Foo != "bar" {
 		t.Errorf("ReqHeaderParser failed: %v", err)
+	}
+}
+
+// Field names are case-insensitive (RFC 7230 §3.2) and the parser stores them
+// lowercased, so a tag in any case must find the header the client sent. Binding
+// the tag verbatim left `header:"apiKey"` empty on every request.
+func TestContext_ReqHeaderParserIsCaseInsensitive(t *testing.T) {
+	tags := []string{"apiKey", "APIKEY", "apikey", "ApiKey"}
+
+	for _, tag := range tags {
+		t.Run(tag, func(t *testing.T) {
+			c := &Context{header: []KV{
+				{K: []byte("apikey"), V: []byte("secret")},
+				{K: []byte("content-type"), V: []byte("application/json")},
+			}}
+
+			dst := reflect.New(reflect.StructOf([]reflect.StructField{{
+				Name: "ApiKey",
+				Type: reflect.TypeOf(""),
+				Tag:  reflect.StructTag(fmt.Sprintf("header:%q", tag)),
+			}}))
+
+			if err := c.ReqHeaderParser(dst.Interface()); err != nil {
+				t.Fatalf("ReqHeaderParser(%q): %v", tag, err)
+			}
+			if got := dst.Elem().Field(0).String(); got != "secret" {
+				t.Errorf("header %q bound to %q, want %q", tag, got, "secret")
+			}
+		})
+	}
+}
+
+// The header travels the full path: parsed off the wire, then bound by a tag
+// whose case does not match what the client sent.
+func TestContext_ReqHeaderParserAfterParsing(t *testing.T) {
+	raw := "GET /v1/budget HTTP/1.1\r\nHost: x\r\nApiKey: secret\r\nContent-Length: 0\r\n\r\n"
+
+	c := newContext()
+	if res := parseRequest(bufio.NewReader(strings.NewReader(raw)), c); res != parseOK {
+		t.Fatalf("parseRequest = %v, want parseOK", res)
+	}
+
+	var header struct {
+		ApiKey string `header:"apiKey"`
+	}
+	if err := c.ReqHeaderParser(&header); err != nil {
+		t.Fatalf("ReqHeaderParser: %v", err)
+	}
+	if header.ApiKey != "secret" {
+		t.Errorf("ApiKey = %q, want %q", header.ApiKey, "secret")
+	}
+	if got := c.Header("APIKEY"); got != "secret" {
+		t.Errorf(`Header("APIKEY") = %q, want %q`, got, "secret")
+	}
+}
+
+// A missing header still yields the zero value: case-insensitive lookup must not
+// turn an absent header into a match on some other field.
+func TestContext_ReqHeaderParserMissingHeader(t *testing.T) {
+	c := &Context{header: []KV{{K: []byte("authorization"), V: []byte("Bearer x")}}}
+
+	var header struct {
+		ApiKey string `header:"apiKey"`
+	}
+	if err := c.ReqHeaderParser(&header); err != nil {
+		t.Fatalf("ReqHeaderParser: %v", err)
+	}
+	if header.ApiKey != "" {
+		t.Errorf("ApiKey = %q, want empty", header.ApiKey)
+	}
+}
+
+// Query and param binding stay exact — only header names are case-insensitive.
+func TestContext_ParserCaseSensitivityIsHeaderOnly(t *testing.T) {
+	c := &Context{
+		query:  []KV{{K: []byte("userId"), V: []byte("7")}},
+		params: []KV{{K: []byte("budgetId"), V: []byte("9")}},
+	}
+
+	var q struct {
+		UserID string `query:"userid"`
+	}
+	if err := c.QueryParser(&q); err != nil {
+		t.Fatalf("QueryParser: %v", err)
+	}
+	if q.UserID != "" {
+		t.Errorf("QueryParser matched %q case-insensitively, want no match", q.UserID)
+	}
+
+	var p struct {
+		BudgetID string `param:"budgetid"`
+	}
+	if err := c.ParamsParser(&p); err != nil {
+		t.Fatalf("ParamsParser: %v", err)
+	}
+	if p.BudgetID != "" {
+		t.Errorf("ParamsParser matched %q case-insensitively, want no match", p.BudgetID)
 	}
 }
 
