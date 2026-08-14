@@ -839,3 +839,72 @@ func TestContext_ParamsDefaultIsUnaffectedByDecoding(t *testing.T) {
 		t.Errorf("Params with no default = %q, want empty", got)
 	}
 }
+
+// Query values decode all the way through a real parse. A handler that hands
+// its query straight to a URL parser — a redirect target, say — got an
+// undecoded string that no parser accepts.
+func TestContext_QueryIsPercentDecoded(t *testing.T) {
+	raw := "GET /v1/budget/view?u=https%3A%2F%2Fpub-x.r2.dev%2Fa.html&name=Minha+Empresa HTTP/1.1\r\nHost: x\r\n\r\n"
+
+	c := newContext()
+	if res := parseRequest(bufio.NewReader(strings.NewReader(raw)), c); res != parseOK {
+		t.Fatalf("parseRequest = %v, want parseOK", res)
+	}
+
+	if got := c.Query("u"); got != "https://pub-x.r2.dev/a.html" {
+		t.Errorf("Query(\"u\") = %q, want the decoded URL", got)
+	}
+	// "+" is a space in a query string (unlike in a path).
+	if got := c.Query("name"); got != "Minha Empresa" {
+		t.Errorf("Query(\"name\") = %q, want %q", got, "Minha Empresa")
+	}
+}
+
+// An escaped key has to decode too, or the lookup never finds it.
+func TestContext_QueryKeyIsPercentDecoded(t *testing.T) {
+	c := newContext()
+	parseQueryString([]byte("phone%20number=5511999"), c)
+
+	if got := c.Query("phone number"); got != "5511999" {
+		t.Errorf("Query(\"phone number\") = %q, want %q", got, "5511999")
+	}
+}
+
+// A malformed escape keeps the pair rather than dropping it: the handler sees
+// exactly what the client sent and decides what to do about it.
+func TestContext_QueryMalformedEscapeIsKeptVerbatim(t *testing.T) {
+	c := newContext()
+	parseQueryString([]byte("u=%zz"), c)
+
+	if got := c.Query("u"); got != "%zz" {
+		t.Errorf("Query(\"u\") = %q, want %q", got, "%zz")
+	}
+}
+
+// The path is NEVER decoded before routing: decoding "%2F" would forge a
+// segment boundary and route the request to a path its URL does not name.
+func TestParseRequestLine_PathIsNotDecodedBeforeRouting(t *testing.T) {
+	raw := "GET /v1/budget/a%2Fb HTTP/1.1\r\nHost: x\r\n\r\n"
+
+	c := newContext()
+	if res := parseRequest(bufio.NewReader(strings.NewReader(raw)), c); res != parseOK {
+		t.Fatalf("parseRequest = %v, want parseOK", res)
+	}
+
+	if got := c.Path(); got != "/v1/budget/a%2Fb" {
+		t.Errorf("Path() = %q, want the escaped path", got)
+	}
+
+	app, _ := New(AppConfig{Port: "0"})
+	app.GET("/v1/budget/:id", func(c *Context) {})
+
+	params := make([]KV, 0, 8)
+	if _, ok := app.lookup(http.MethodGet, c.path, &params); !ok {
+		t.Fatal("the escaped segment did not match the single-segment route")
+	}
+	// One segment for the router, decoded only when the handler asks for it.
+	ctx := &Context{params: params}
+	if got := ctx.Params("id"); got != "a/b" {
+		t.Errorf("Params(\"id\") = %q, want %q", got, "a/b")
+	}
+}

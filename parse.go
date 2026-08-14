@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net/url"
 	"strconv"
 )
 
@@ -261,6 +262,26 @@ func headerValues(c *Context, k []byte) [][]byte {
 	return values
 }
 
+// unescapeQuery percent-decodes a query key or value, leaving a malformed
+// escape verbatim rather than dropping the pair. QueryUnescape, not
+// PathUnescape: the query string is the one place where "+" spells a space.
+//
+// Only the query is decoded here — never the path, which the router matches on.
+// Decoding "%2F" before splitting would let a client forge a segment boundary
+// and reach a route the URL it sent does not name.
+func unescapeQuery(v []byte) []byte {
+	if bytes.IndexByte(v, '%') == -1 && bytes.IndexByte(v, '+') == -1 {
+		return v
+	}
+
+	decoded, err := url.QueryUnescape(string(v))
+	if err != nil {
+		return v
+	}
+
+	return []byte(decoded)
+}
+
 func parseQueryString(qs []byte, c *Context) {
 	for len(qs) > 0 {
 		var pair []byte
@@ -275,9 +296,9 @@ func parseQueryString(qs []byte, c *Context) {
 			continue
 		}
 		if eq := bytes.IndexByte(pair, '='); eq != -1 {
-			c.query = append(c.query, KV{pair[:eq], pair[eq+1:]})
+			c.query = append(c.query, KV{unescapeQuery(pair[:eq]), unescapeQuery(pair[eq+1:])})
 		} else {
-			c.query = append(c.query, KV{pair, nil})
+			c.query = append(c.query, KV{unescapeQuery(pair), nil})
 		}
 	}
 }
