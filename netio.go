@@ -342,6 +342,7 @@ func (a *App) lookup(method string, path []byte, params *[]KV) (*route, bool) {
 	segments := splitBytes(path)
 
 	if r, ok := a.root.findMethod(method, segments, params); ok {
+		nameParams(r, *params)
 		return r, true
 	}
 	if method != http.MethodHead {
@@ -352,7 +353,24 @@ func (a *App) lookup(method string, path []byte, params *[]KV) (*route, bool) {
 	// params behind.
 	*params = (*params)[:0]
 
-	return a.root.findMethod(http.MethodGet, segments, params)
+	r, ok := a.root.findMethod(http.MethodGet, segments, params)
+	if ok {
+		nameParams(r, *params)
+	}
+
+	return r, ok
+}
+
+// nameParams labels the values the walk collected with the matched route's own
+// parameter names. The walk cannot do it: a param node is shared by every route
+// that has a parameter in that position, and those routes are free to name it
+// differently.
+func nameParams(r *route, params []KV) {
+	for i := range params {
+		if i < len(r.paramKeys) {
+			params[i].K = r.paramKeys[i]
+		}
+	}
 }
 
 func (a *App) acceptLoop(ln net.Listener) error {

@@ -266,3 +266,80 @@ func TestServe_GroupRootRouteIsReachable(t *testing.T) {
 		}
 	}
 }
+
+// Two routes may name the same position differently — "/:gmail/:budget_number"
+// registered alongside "/:enterprise_name/all". The name belongs to the route,
+// not to the trie node they share: storing it on the node handed every later
+// route the first one's name, and a handler asking for its own parameter got an
+// empty string while the value sat under a name it never heard of.
+func TestGroup_ParamNamesAreRouteLocal(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0"})
+
+	g := app.Group("/v1/account/budget")
+	g.Get("/:enterprise_name/all", func(c *Context) {})
+	g.Get("/:gmail/:budget_number", func(c *Context) {})
+	g.Get("/:gmail/search/:prefix", func(c *Context) {})
+
+	tests := []struct {
+		path string
+		want map[string]string
+	}{
+		{"/v1/account/budget/Acme/all", map[string]string{"enterprise_name": "Acme"}},
+		{"/v1/account/budget/test@test.com/42", map[string]string{"gmail": "test@test.com", "budget_number": "42"}},
+		{"/v1/account/budget/test@test.com/search/or", map[string]string{"gmail": "test@test.com", "prefix": "or"}},
+	}
+
+	for _, tt := range tests {
+		params := make([]KV, 0, 8)
+		if _, ok := app.lookup("GET", []byte(tt.path), &params); !ok {
+			t.Fatalf("%s did not match any route", tt.path)
+		}
+
+		got := map[string]string{}
+		for _, kv := range params {
+			got[string(kv.K)] = string(kv.V)
+		}
+		if len(got) != len(tt.want) {
+			t.Errorf("%s params = %v, want %v", tt.path, got, tt.want)
+		}
+		for k, want := range tt.want {
+			if got[k] != want {
+				t.Errorf("%s Params(%q) = %q, want %q", tt.path, k, got[k], want)
+			}
+		}
+	}
+}
+
+// The same route-local naming when the colliding registrations come from
+// different groups hanging off one prefix, which is how the account routes are
+// written: Group("/:id") and Group("/:gmail") share a parent.
+func TestGroup_ParamNamesAcrossSiblingGroups(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0"})
+
+	account := app.Group("/v1/account/whatsapp")
+	account.Group("/:id").Post("/message/send", func(c *Context) {})
+	account.Group("/:gmail").Get("/", func(c *Context) {})
+
+	params := make([]KV, 0, 8)
+	if _, ok := app.lookup("GET", []byte("/v1/account/whatsapp/test@test.com"), &params); !ok {
+		t.Fatal("the /:gmail group route did not match")
+	}
+	if len(params) != 1 || string(params[0].K) != "gmail" || string(params[0].V) != "test@test.com" {
+		t.Errorf("params = %v, want gmail=test@test.com", params)
+	}
+}
+
+// A HEAD request falling back to the GET route is named by that route too.
+func TestApp_ParamNamesOnHeadFallback(t *testing.T) {
+	app, _ := New(AppConfig{Port: "0"})
+	app.GET("/v1/file/:fileId", func(c *Context) {})
+	app.GET("/v1/:gmail/all", func(c *Context) {})
+
+	params := make([]KV, 0, 8)
+	if _, ok := app.lookup("HEAD", []byte("/v1/file/7"), &params); !ok {
+		t.Fatal("HEAD did not fall back to the GET route")
+	}
+	if len(params) != 1 || string(params[0].K) != "fileId" || string(params[0].V) != "7" {
+		t.Errorf("params = %v, want fileId=7", params)
+	}
+}

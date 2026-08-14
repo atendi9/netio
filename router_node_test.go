@@ -25,6 +25,7 @@ func TestNode_ParamPath(t *testing.T) {
 	if !ok || len(handlers.handlers) != 1 {
 		t.Fatal("expected handler found")
 	}
+	nameParams(handlers, params)
 	if len(params) != 1 || !bytes.Equal(params[0].K, []byte("id")) || !bytes.Equal(params[0].V, []byte("42")) {
 		t.Errorf("unexpected params: %+v", params)
 	}
@@ -58,10 +59,11 @@ func TestNode_StaticPreferredOverParam(t *testing.T) {
 
 	// Other values should still match param
 	params = []KV{}
-	_, ok = root.findMethod("GET", [][]byte{[]byte("users"), []byte("42")}, &params)
+	r, ok := root.findMethod("GET", [][]byte{[]byte("users"), []byte("42")}, &params)
 	if !ok {
 		t.Fatal("expected param route to match")
 	}
+	nameParams(r, params)
 	if len(params) != 1 || !bytes.Equal(params[0].K, []byte("id")) {
 		t.Errorf("expected param 'id', got %+v", params)
 	}
@@ -96,6 +98,7 @@ func TestNode_BacktrackToParamSibling(t *testing.T) {
 	if !ok || h == nil {
 		t.Fatal("expected param route to match via backtracking")
 	}
+	nameParams(h, params)
 	if len(params) != 1 || !bytes.Equal(params[0].K, []byte("id")) || !bytes.Equal(params[0].V, []byte("new")) {
 		t.Errorf("expected param id=new, got %+v", params)
 	}
@@ -136,6 +139,7 @@ func TestNode_DifferentMethodSamePath(t *testing.T) {
 	if !ok || len(handlers.handlers) != 1 {
 		t.Fatal("expected POST handler found")
 	}
+	nameParams(handlers, params)
 	if len(params) != 1 || !bytes.Equal(params[0].K, []byte("id")) || !bytes.Equal(params[0].V, []byte("42")) {
 		t.Errorf("unexpected params: %+v", params)
 	}
